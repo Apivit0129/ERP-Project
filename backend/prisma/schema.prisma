@@ -1,0 +1,122 @@
+// ส่วนที่ 1: กำหนดค่าเครื่องมือและประเภท Database
+generator client {
+  provider = "prisma-client-js"
+}
+
+
+datasource db {
+  provider = "postgresql"
+}
+
+// NOTE: Prisma v7 no longer supports `url` in schema files.
+// The connection URL for migrations and the client is configured
+// in `prisma.config.ts` (see that file for `datasource.url`).
+
+// ==========================================
+// ส่วนที่ 2: สร้าง ENUM (ตัวเลือกกำหนดตายตัวเพื่อความถูกต้องของข้อมูล)
+// ==========================================
+enum Role {
+  ADMIN
+  MANAGER
+  WAREHOUSE_STAFF
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
+enum StockMovementType {
+  IN
+  OUT
+  ADJUST
+}
+
+// ==========================================
+// ส่วนที่ 3: ตารางหลักทั้ง 5 (Models & Relations)
+// ==========================================
+
+// 1. ตารางผู้ใช้งานระบบ
+model User {
+  id           Int      @id @default(autoincrement())
+  username     String   @unique // ห้ามมีชื่อผู้ใช้ซ้ำกัน
+  passwordHash String   @map("password_hash") // ใช้ @map เพื่อให้ชื่อใน Database เป็น snake_case ตามมาตรฐาน SQL
+  role         Role     @default(WAREHOUSE_STAFF)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // ความสัมพันธ์ (Relations) - SA จะเห็นชัดเลยว่า 1 User ทำอะไรได้บ้าง
+  orders         Order[]         // 1 User สร้างออเดอร์ได้หลายใบ
+  stockMovements StockMovement[] // 1 User ขยับสต๊อกได้หลายครั้ง
+
+  @@map("users") // ตั้งชื่อตารางจริงใน DB ให้เป็นรูปพหูพจน์
+}
+
+// 2. ตารางสินค้า
+model Product {
+  id            Int      @id @default(autoincrement())
+  sku           String   @unique // รหัสบาร์โค้ด ห้ามซ้ำ
+  name          String
+  price         Decimal  @db.Decimal(10, 2) // เก็บเป็น Decimal 2 ตำแหน่ง เหมาะกับเรื่องเงินทอง
+  currentStock  Int      @default(0) @map("current_stock")
+  minStockAlert Int      @default(10) @map("min_stock_alert") // จุดแจ้งเตือนของใกล้หมด
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // ความสัมพันธ์
+  orderItems     OrderItem[]     // 1 สินค้า อยู่ในรายการออเดอร์ได้หลายรายการ
+  stockMovements StockMovement[] // 1 สินค้า มีประวัติเข้า-ออกได้หลายรอบ
+
+  @@map("products")
+}
+
+// 3. ตารางหัวบิลคำสั่งซื้อ
+model Order {
+  id          Int         @id @default(autoincrement())
+  orderNumber String      @unique @map("order_number") // รหัสบิล เช่น ORD-2026-0001
+  customerName String     @map("customer_name")
+  totalAmount Decimal     @db.Decimal(10, 2) @map("total_amount")
+  status      OrderStatus @default(PENDING)
+  createdById Int         @map("created_by_id") // Foreign Key
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  // ความสัมพันธ์ (เชื่อม Foreign Key เข้ากับตาราง User)
+  createdBy  User        @relation(fields: [createdById], references: [id])
+  orderItems OrderItem[] // 1 บิล มีสินค้าได้หลายรายการ (One-to-Many)
+
+  @@map("orders")
+}
+
+// 4. ตารางรายการสินค้าในบิล (Line Items)
+model OrderItem {
+  id        Int     @id @default(autoincrement())
+  orderId   Int     @map("order_id")   // Foreign Key ชี้ไปหาหัวบิล
+  productId Int     @map("product_id") // Foreign Key ชี้ไปหาสินค้า
+  quantity  Int
+  unitPrice Decimal @db.Decimal(10, 2) @map("unit_price") // เก็บราคา ณ วันที่ซื้อ (ป้องกันปัญหาราคาสินค้าเปลี่ยนในอนาคต)
+
+  // ความสัมพันธ์
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade) // ถ้าลบหัวบิล ให้ลบรายการย่อยด้วย
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("order_items")
+}
+
+// 5. ตารางบันทึกประวัติสต๊อก (⭐ หัวใจของระบบ ERP Audit Trail)
+model StockMovement {
+  id            Int               @id @default(autoincrement())
+  productId     Int               @map("product_id")
+  type          StockMovementType // IN, OUT, หรือ ADJUST
+  quantity      Int               // จำนวนที่ขยับ (เป็นบวกเสมอ)
+  referenceId   String?           @map("reference_id") // เป็น Null ได้ ใช้เก็บเลขออเดอร์ เช่น "ORD-2026-0001" หรือ "PO-001"
+  performedById Int               @map("performed_by_id")
+  createdAt     DateTime          @default(now()) @map("created_at")
+
+  // ความสัมพันธ์
+  product     Product @relation(fields: [productId], references: [id])
+  performedBy User    @relation(fields: [performedById], references: [id])
+
+  @@map("stock_movements")
+}
