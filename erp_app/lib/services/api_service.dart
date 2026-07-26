@@ -1,0 +1,184 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart'; // ✅ รองรับ Web!
+import '../models/product.dart';
+
+class ApiService {
+  // 💡 ใช้ localhost แทน 127.0.0.1 เพื่อให้ CORS ผ่านบน Chrome ได้ถูกต้อง
+  static const String baseUrl = 'http://localhost:3000/api';
+
+  // ==========================================
+  // ส่วนที่ 1: จัดการ Token และ Login
+  // ==========================================
+
+  // สมัครสมาชิก (Register)
+  Future<Map<String, dynamic>> register(
+    String username,
+    String password,
+    String? role,
+  ) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/register'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'username': username,
+        'password': password,
+        'role': role ?? 'WAREHOUSE_STAFF',
+      }),
+    );
+
+    final data = json.decode(response.body);
+    if (response.statusCode == 201 && data['success'] == true) {
+      return data['data'];
+    } else {
+      throw Exception(data['message'] ?? 'สมัครสมาชิกไม่สำเร็จ');
+    }
+  }
+
+  // ล็อกอินและเก็บ Token พร้อมสิทธิ์ผู้ใช้ลง SharedPreferences (รองรับ Web)
+  Future<Map<String, dynamic>> login(String username, String password) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/login'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({'username': username, 'password': password}),
+    );
+
+    final data = json.decode(response.body);
+    if (response.statusCode == 200 && data['success'] == true) {
+      // บันทึก Token และสิทธิ์เก็บไว้ใน SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('jwt_token', data['token']);
+      await prefs.setString('user_role', data['user']['role']);
+      await prefs.setString('username', data['user']['username']);
+      return data['user'];
+    } else {
+      throw Exception(data['message'] ?? 'เข้าสู่ระบบไม่สำเร็จ');
+    }
+  }
+
+  // ล็อกเอาท์ (ลบ Token ทิ้งทั้งหมด)
+  Future<void> logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('jwt_token');
+    await prefs.remove('user_role');
+    await prefs.remove('username');
+  }
+
+  // อ่านข้อมูลสิทธิ์ที่ล็อกอินอยู่ปัจจุบัน
+  Future<String?> getUserRole() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('user_role');
+  }
+
+  Future<String?> getUsername() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('username');
+  }
+
+  // 💡 ฟังก์ชันลับของ SA: เตรียม Header พร้อมเหน็บ Token (Bearer <token>)
+  Future<Map<String, String>> _getHeaders() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('jwt_token');
+    return {
+      'Content-Type': 'application/json',
+      if (token != null)
+        'Authorization': 'Bearer $token', // ถ้ามี Token ให้เหน็บไปด้วยเสมอ!
+    };
+  }
+
+  // ==========================================
+  // ส่วนที่ 2: ERP API (เหน็บ _getHeaders() ทุกจุด!)
+  // ==========================================
+
+  Future<List<Product>> fetchProducts() async {
+    try {
+      final headers = await _getHeaders();
+      final response = await http.get(
+        Uri.parse('$baseUrl/products'),
+        headers: headers,
+      );
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> jsonResponse = json.decode(response.body);
+        final List<dynamic> productsJson = jsonResponse['data'];
+        return productsJson.map((json) => Product.fromJson(json)).toList();
+      } else if (response.statusCode == 401 || response.statusCode == 403) {
+        throw Exception('เซสชันหมดอายุ กรุณาล็อกอินใหม่');
+      } else {
+        throw Exception('ดึงข้อมูลล้มเหลว (Status: ${response.statusCode})');
+      }
+    } catch (e) {
+      throw Exception('ข้อผิดพลาด: $e');
+    }
+  }
+
+  Future<void> createProduct({
+    required String sku,
+    required String name,
+    required double price,
+    required int currentStock,
+    required int minStockAlert,
+  }) async {
+    final headers = await _getHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/products'),
+      headers: headers,
+      body: json.encode({
+        'sku': sku,
+        'name': name,
+        'price': price,
+        'currentStock': currentStock,
+        'minStockAlert': minStockAlert,
+      }),
+    );
+    if (response.statusCode != 201) {
+      final data = json.decode(response.body);
+      throw Exception(data['message'] ?? 'บันทึกไม่สำเร็จ');
+    }
+  }
+
+  Future<void> recordStockMovement({
+    required int productId,
+    required String type,
+    required int quantity,
+    String? referenceId,
+  }) async {
+    final headers = await _getHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/stock-movements'),
+      headers: headers,
+      body: json.encode({
+        'productId': productId,
+        'type': type,
+        'quantity': quantity,
+        'referenceId': referenceId,
+      }),
+    );
+    if (response.statusCode != 201) {
+      final data = json.decode(response.body);
+      throw Exception(data['message'] ?? 'ปรับสต๊อกไม่สำเร็จ');
+    }
+  }
+
+  // ==========================================
+  // ส่วนที่ 3: Orders API (เปิดบิล POS)
+  // ==========================================
+
+  Future<Map<String, dynamic>> createOrder({
+    required String customerName,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    final headers = await _getHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/orders'),
+      headers: headers,
+      body: json.encode({'customerName': customerName, 'items': items}),
+    );
+    final data = json.decode(response.body);
+    if (response.statusCode == 201 && data['success'] == true) {
+      return data['data'];
+    } else {
+      throw Exception(data['message'] ?? 'เปิดบิลไม่สำเร็จ');
+    }
+  }
+}
