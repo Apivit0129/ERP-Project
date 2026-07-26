@@ -49,6 +49,7 @@ model User {
   // ความสัมพันธ์ (Relations) - SA จะเห็นชัดเลยว่า 1 User ทำอะไรได้บ้าง
   orders         Order[]         // 1 User สร้างออเดอร์ได้หลายใบ
   stockMovements StockMovement[] // 1 User ขยับสต๊อกได้หลายครั้ง
+  purchaseOrders PurchaseOrder[]
 
   @@map("users") // ตั้งชื่อตารางจริงใน DB ให้เป็นรูปพหูพจน์
 }
@@ -67,7 +68,8 @@ model Product {
   // ความสัมพันธ์
   orderItems     OrderItem[]     // 1 สินค้า อยู่ในรายการออเดอร์ได้หลายรายการ
   stockMovements StockMovement[] // 1 สินค้า มีประวัติเข้า-ออกได้หลายรอบ
-
+  purchaseOrderItems PurchaseOrderItem[]
+  
   @@map("products")
 }
 
@@ -119,4 +121,59 @@ model StockMovement {
   performedBy User    @relation(fields: [performedById], references: [id])
 
   @@map("stock_movements")
+}
+
+// ==========================================
+// ส่วนที่ 4: โมดูลจัดซื้อ (Procurement - Purchase Orders)
+// ==========================================
+
+// ตารางซัพพลายเออร์ (ผู้ผลิต/บริษัทคู่ค้า)
+model Supplier {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  contactInfo String?  @map("contact_info") // เบอร์โทร หรือ อีเมล
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  purchaseOrders PurchaseOrder[] // 1 ซัพพลายเออร์ มีใบสั่งซื้อได้หลายใบ
+
+  @@map("suppliers")
+}
+
+// สถานะของใบสั่งซื้อ
+enum POStatus {
+  PENDING   // สร้างใบสั่งซื้อแล้ว รอซัพพลายเออร์ส่งของ
+  RECEIVED  // พนักงานคลังสินค้ารับของเข้าสต๊อกเรียบร้อยแล้ว
+  CANCELLED // ยกเลิกการสั่งซื้อ
+}
+
+// ตารางใบสั่งซื้อ (Purchase Order Header)
+model PurchaseOrder {
+  id         Int      @id @default(autoincrement())
+  poNumber   String   @unique @map("po_number") // เลขใบสั่งซื้อ เช่น PO-2026-0001
+  supplierId Int      @map("supplier_id")
+  status     POStatus @default(PENDING)
+  createdById Int     @map("created_by_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  supplier  Supplier          @relation(fields: [supplierId], references: [id])
+  createdBy User              @relation(fields: [createdById], references: [id])
+  items     PurchaseOrderItem[] // 1 ใบสั่งซื้อ มีสินค้าได้หลายรายการ
+
+  @@map("purchase_orders")
+}
+
+// ตารางรายการสินค้าในใบสั่งซื้อ (Purchase Order Items)
+model PurchaseOrderItem {
+  id              Int     @id @default(autoincrement())
+  purchaseOrderId Int     @map("purchase_order_id")
+  productId       Int     @map("product_id")
+  orderQuantity   Int     @map("order_quantity") // จำนวนที่สั่งซื้อไป
+  receivedQuantity Int    @default(0) @map("received_quantity") // จำนวนที่รับเข้าคลังจริง
+  unitCost        Decimal @db.Decimal(10, 2) @map("unit_cost") // ต้นทุนซื้อเข้า (ต่างจากตาราง Product ที่เป็นราคาขาย)
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product       Product       @relation(fields: [productId], references: [id])
+
+  @@map("purchase_order_items")
 }

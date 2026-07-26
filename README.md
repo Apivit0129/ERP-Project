@@ -52,6 +52,8 @@ cp .env.example .env
 npm run dev
 ```
 
+ไฟล์ `.env` ไม่ควรถูกเก็บขึ้น GitHub เนื่องจากมีค่าลับ เช่น `DATABASE_URL` และ `JWT_SECRET`.
+
 ### 2. Frontend
 
 ```bash

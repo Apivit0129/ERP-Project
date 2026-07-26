@@ -333,6 +333,115 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
   }
 });
 
+// =========================================================================
+// โซนที่ 3: โมดูลจัดซื้อ (Procurement - Purchase Orders)
+// =========================================================================
+
+// 3.1 API: ดึงรายการซัพพลายเออร์ (เพื่อทำ Dropdown ในหน้าแอป)
+app.get('/api/suppliers', authenticateToken, async (req, res) => {
+  try {
+    const suppliers = await prisma.supplier.findMany();
+    res.status(200).json({ success: true, data: suppliers });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "ดึงข้อมูลซัพพลายเออร์ล้มเหลว" });
+  }
+});
+
+// 3.2 API: เปิดใบสั่งซื้อ (Create Purchase Order)
+app.post('/api/purchase-orders', authenticateToken, authorizeRoles('ADMIN', 'MANAGER'), async (req, res) => {
+  try {
+    const { supplierId, items } = req.body;
+    if (!supplierId || !items || items.length === 0) return res.status(400).json({ success: false, message: "ข้อมูลไม่ครบถ้วน" });
+
+    // สร้างเลขที่ใบสั่งซื้อ เช่น PO-20260727-8899
+    const poNumber = `PO-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const newPO = await prisma.$transaction(async (tx) => {
+      // 1. สร้างหัวบิล PO
+      const po = await tx.purchaseOrder.create({
+        data: {
+          poNumber: poNumber,
+          supplierId: parseInt(supplierId),
+          status: 'PENDING', // ⭐ สำคัญ: สั่งเฉยๆ ยังไม่ได้ของ สต๊อกยังไม่ขึ้น!
+          createdById: req.user.id
+        }
+      });
+
+      // 2. บันทึกรายการสินค้าใน PO
+      for (const item of items) {
+        await tx.purchaseOrderItem.create({
+          data: {
+            purchaseOrderId: po.id,
+            productId: parseInt(item.productId),
+            orderQuantity: parseInt(item.quantity),
+            unitCost: parseFloat(item.unitCost)
+          }
+        });
+      }
+      return po;
+    });
+
+    res.status(201).json({ success: true, message: "สร้างใบสั่งซื้อ (PO) สำเร็จ!", data: newPO });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "สร้างใบสั่งซื้อล้มเหลว" });
+  }
+});
+
+// 3.3 API: รับของเข้าคลังจากใบ PO (Receive PO & Update Stock)
+app.post('/api/purchase-orders/:id/receive', authenticateToken, authorizeRoles('ADMIN', 'MANAGER', 'WAREHOUSE_STAFF'), async (req, res) => {
+  try {
+    const poId = parseInt(req.params.id);
+    const { receivedItems } = req.body; // อาเรย์เก็บ productId และ จำนวนที่รับจริง
+
+    const po = await prisma.purchaseOrder.findUnique({ where: { id: poId }, include: { items: true } });
+    if (!po) return res.status(404).json({ success: false, message: "ไม่พบใบสั่งซื้อนี้" });
+    if (po.status === 'RECEIVED') return res.status(400).json({ success: false, message: "ใบสั่งซื้อนี้รับของเข้าคลังไปแล้ว" });
+
+    // ⭐ พระเอก SA: Transaction ตัดยอดรับของ + อัปเดตสต๊อก + สร้าง Audit Trail พร้อมกัน!
+    const result = await prisma.$transaction(async (tx) => {
+      for (const reqItem of receivedItems) {
+        // หา Item ใน PO เพื่อเอามาอัปเดตยอดที่รับจริง
+        const poItem = po.items.find(i => i.productId === reqItem.productId);
+        if (poItem) {
+          await tx.purchaseOrderItem.update({
+            where: { id: poItem.id },
+            data: { receivedQuantity: reqItem.receivedQuantity } // บันทึกว่ารับของมากี่ชิ้น (อาจจะไม่เท่ากับ orderQuantity ถ้าของขาด)
+          });
+
+          // อัปเดตสต๊อกหลักในคลัง (เพิ่มของเข้า)
+          await tx.product.update({
+            where: { id: poItem.productId },
+            data: { currentStock: { increment: reqItem.receivedQuantity } } // ใช้ { increment: ... } เป็นทริคให้บวกค่าเพิ่มไปจากเดิม
+          });
+
+          // ⭐ บันทึก Audit Trail อัตโนมัติ อ้างอิงเลข PO!
+          await tx.stockMovement.create({
+            data: {
+              productId: poItem.productId,
+              type: 'IN', // ประเภทรับเข้า
+              quantity: reqItem.receivedQuantity,
+              referenceId: po.poNumber, // อ้างอิงว่าเข้าเพราะใบสั่งซื้อเบอร์นี้!
+              performedById: req.user.id
+            }
+          });
+        }
+      }
+
+      // ปิดงาน: เปลี่ยนสถานะหัวบิล PO เป็น RECEIVED
+      const updatedPO = await tx.purchaseOrder.update({
+        where: { id: poId },
+        data: { status: 'RECEIVED' }
+      });
+
+      return updatedPO;
+    });
+
+    res.status(200).json({ success: true, message: `รับสินค้าจากใบสั่งซื้อ ${po.poNumber} เข้าคลังสำเร็จ!`, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "รับสินค้าเข้าคลังล้มเหลว" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 เซิร์ฟเวอร์ ERP พร้อมระบบ Security เปิดทำงานแล้วที่พอร์ต http://localhost:${PORT}`);
 });

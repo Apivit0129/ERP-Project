@@ -181,4 +181,34 @@ class ApiService {
       throw Exception(data['message'] ?? 'เปิดบิลไม่สำเร็จ');
     }
   }
+
+  // ดึงรายการซัพพลายเออร์
+  Future<List<Map<String, dynamic>>> fetchSuppliers() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/suppliers'),
+      headers: await _getHeaders(),
+    );
+    if (response.statusCode == 200) {
+      final List<dynamic> data = json.decode(response.body)['data'];
+      return data.cast<Map<String, dynamic>>();
+    }
+    throw Exception('ดึงข้อมูลซัพพลายเออร์ล้มเหลว');
+  }
+
+  // สร้างใบสั่งซื้อ (PO)
+  Future<void> createPurchaseOrder(
+    int supplierId,
+    List<Map<String, dynamic>> items,
+  ) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/purchase-orders'),
+      headers: await _getHeaders(),
+      body: json.encode({'supplierId': supplierId, 'items': items}),
+    );
+    if (response.statusCode != 201) {
+      throw Exception(
+        json.decode(response.body)['message'] ?? 'เปิด PO ล้มเหลว',
+      );
+    }
+  }
 }

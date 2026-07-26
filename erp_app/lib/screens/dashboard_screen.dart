@@ -352,6 +352,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // ดีไซน์ตารางแจ้งเตือนสินค้าใกล้หมด (Web Table Style)
+  // ดีไซน์ตารางแจ้งเตือนสินค้าใกล้หมด (Web Table Style) พร้อมปุ่ม Create PO
   Widget _buildLowStockTable(List<Product> lowStockProducts) {
     return Container(
       width: double.infinity,
@@ -364,96 +365,279 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: DataTable(
-          headingRowColor: MaterialStateProperty.all(Colors.red.shade50),
-          columns: const [
-            DataColumn(
-              label: Text(
-                'รหัส SKU',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text(
-                'ชื่อสินค้า',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text(
-                'ราคา/ชิ้น',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            DataColumn(
-              label: Text(
-                'คงเหลือในคลัง',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.red,
+        child: SingleChildScrollView(
+          scrollDirection:
+              Axis.horizontal, // เผื่อหน้าจอแคบให้เลื่อนตารางซ้ายขวาได้
+          child: DataTable(
+            headingRowColor: MaterialStateProperty.all(Colors.red.shade50),
+            columns: const [
+              DataColumn(
+                label: Text(
+                  'รหัส SKU',
+                  style: TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
-            ),
-            DataColumn(
-              label: Text(
-                'เกณฑ์แจ้งเตือน',
-                style: TextStyle(fontWeight: FontWeight.bold),
+              DataColumn(
+                label: Text(
+                  'ชื่อสินค้า',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
               ),
-            ),
-            DataColumn(
-              label: Text(
-                'สถานะ',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-          rows: lowStockProducts.map((product) {
-            return DataRow(
-              cells: [
-                DataCell(
-                  Text(
-                    product.sku,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+              DataColumn(
+                label: Text(
+                  'คงเหลือในคลัง',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.red,
                   ),
                 ),
-                DataCell(Text(product.name)),
-                DataCell(Text('฿${product.price.toStringAsFixed(2)}')),
-                DataCell(
-                  Text(
-                    '${product.currentStock} ชิ้น',
-                    style: const TextStyle(
-                      color: Colors.red,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+              ),
+              DataColumn(
+                label: Text(
+                  'สถานะ',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+              DataColumn(
+                label: Text(
+                  'จัดการ (Action)',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ), // เพิ่มคอลัมน์ใหม่
+            ],
+            rows: lowStockProducts.map((product) {
+              return DataRow(
+                cells: [
+                  DataCell(
+                    Text(
+                      product.sku,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
-                ),
-                DataCell(Text('${product.minStockAlert} ชิ้น')),
-                DataCell(
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.red,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Text(
-                      'ต้องสั่งเพิ่ม!',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
+                  DataCell(Text(product.name)),
+                  DataCell(
+                    Text(
+                      '${product.currentStock} ชิ้น',
+                      style: const TextStyle(
+                        color: Colors.red,
                         fontWeight: FontWeight.bold,
+                        fontSize: 16,
                       ),
                     ),
                   ),
+                  DataCell(
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Text(
+                        'ต้องสั่งเพิ่ม!',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                  // ปุ่มกดสั่งซื้อ (Create PO) สำหรับผู้จัดการ
+                  DataCell(
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue.shade800,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                      ),
+                      icon: const Icon(Icons.add_shopping_cart, size: 16),
+                      label: const Text(
+                        'ออกใบ PO',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      onPressed: () => _showCreatePODialog(
+                        product,
+                      ), // เรียกฟังก์ชันเปิด Dialog
+                    ),
+                  ),
+                ],
+              );
+            }).toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // =========================================================================
+  // ฟังก์ชันแสดง Pop-up เปิดใบสั่งซื้อ PO (สำหรับผู้จัดการ)
+  // =========================================================================
+  void _showCreatePODialog(Product product) async {
+    // 1. โหลดข้อมูลซัพพลายเออร์ขึ้นมาก่อน
+    List<Map<String, dynamic>> suppliers = [];
+    try {
+      suppliers = await _apiService.fetchSuppliers();
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('โหลดซัพพลายเออร์ล้มเหลว: $e')));
+      return;
+    }
+
+    if (suppliers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'ไม่พบรายชื่อซัพพลายเออร์ในระบบ (กรุณาเพิ่มใน Database ก่อน)',
+          ),
+        ),
+      );
+      return;
+    }
+
+    int selectedSupplierId = suppliers.first['id'];
+    final qtyController = TextEditingController(
+      text: '10',
+    ); // แนะนำสั่งทีละ 10 ชิ้น
+    final costController = TextEditingController(
+      text: (product.price * 0.7).toStringAsFixed(0),
+    ); // จำลองต้นทุนซื้อเข้าเป็น 70% ของราคาขาย
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        bool isSubmitting = false;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text('📄 ออกใบสั่งซื้อ (PO) - ${product.name}'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Dropdown เลือกซัพพลายเออร์
+                  DropdownButtonFormField<int>(
+                    decoration: const InputDecoration(
+                      labelText: 'เลือกบริษัทซัพพลายเออร์',
+                      border: OutlineInputBorder(),
+                    ),
+                    value: selectedSupplierId,
+                    items: suppliers.map((sup) {
+                      return DropdownMenuItem<int>(
+                        value: sup['id'],
+                        child: Text(sup['name']),
+                      );
+                    }).toList(),
+                    onChanged: (val) {
+                      if (val != null)
+                        setDialogState(() => selectedSupplierId = val);
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: qtyController,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'จำนวนที่สั่ง (ชิ้น)',
+                            prefixIcon: Icon(Icons.numbers),
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextFormField(
+                          controller: costController,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'ต้นทุน/ชิ้น (บาท)',
+                            prefixIcon: Icon(Icons.money),
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    '⚠️ หมายเหตุ: การออก PO จะยังไม่เพิ่มสต๊อกในคลัง จนกว่าพนักงานคลังจะกด "รับของ" ตามใบ PO',
+                    style: TextStyle(
+                      color: Colors.orange,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('ยกเลิก'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue.shade800,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          setDialogState(() => isSubmitting = true);
+                          try {
+                            // ส่งโครงสร้าง JSON ไปหา Node.js
+                            await _apiService.createPurchaseOrder(
+                              selectedSupplierId,
+                              [
+                                {
+                                  'productId': product.id,
+                                  'quantity': int.parse(qtyController.text),
+                                  'unitCost': double.parse(costController.text),
+                                },
+                              ],
+                            );
+
+                            if (ctx.mounted) {
+                              Navigator.pop(ctx);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    '🎉 ส่งใบสั่งซื้อ (PO) ไปให้ซัพพลายเออร์เรียบร้อยแล้ว!',
+                                  ),
+                                  backgroundColor: Colors.green,
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            setDialogState(() => isSubmitting = false);
+                            if (ctx.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(e.toString()),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          }
+                        },
+                  child: isSubmitting
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text('ยืนยันสร้างใบสั่งซื้อ'),
                 ),
               ],
             );
-          }).toList(),
-        ),
-      ),
+          },
+        );
+      },
     );
   }
 }
