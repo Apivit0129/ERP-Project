@@ -52,6 +52,17 @@ cp .env.example .env
 npm run dev
 ```
 
+### Prisma Studio
+
+Prisma Studio ต้องรันจากโฟลเดอร์ `backend` เพื่ออ่านไฟล์ `.env` และ `prisma.config.ts`:
+
+```bash
+cd backend
+npm run studio
+```
+
+หากเบราว์เซอร์ไม่เปิดให้อัตโนมัติ ให้เปิด URL ที่คำสั่งแสดงใน Terminal (เช่น `http://localhost:51212`)
+
 ไฟล์ `.env` ไม่ควรถูกเก็บขึ้น GitHub เนื่องจากมีค่าลับ เช่น `DATABASE_URL` และ `JWT_SECRET`.
 
 ### 2. Frontend

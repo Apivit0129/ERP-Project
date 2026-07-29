@@ -68,9 +68,13 @@ class ApiService {
         return data['user'];
       }
       throw Exception(data['message'] ?? 'เข้าสู่ระบบไม่สำเร็จ');
+    } on http.ClientException catch (_) {
+      throw Exception(
+        'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาเปิด backend ด้วย npm run dev',
+      );
     } on SocketException {
       throw Exception(
-        'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาเปิด backend และตรวจสอบ API_BASE_URL',
+        'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาเปิด backend ด้วย npm run dev',
       );
     } on FormatException {
       throw Exception('เซิร์ฟเวอร์ตอบกลับข้อมูลไม่ถูกต้อง');
