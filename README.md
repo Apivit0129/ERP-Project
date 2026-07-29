@@ -62,6 +62,19 @@ flutter pub get
 flutter run
 ```
 
+### การเชื่อมต่อจาก Android
+
+ต้องเปิด backend ก่อนด้วย `cd backend && npm run dev` เสมอ เพราะแอปจะล็อกอินไม่ได้หาก API ที่พอร์ต 3000 ไม่ทำงาน
+
+- Android Emulator ใช้ `http://10.0.2.2:3000/api` ให้อัตโนมัติ
+- เครื่องจริง ต้องระบุ IP ของเครื่องที่รัน backend (และอยู่ Wi-Fi เดียวกัน) เช่น
+
+```bash
+flutter run --dart-define=API_BASE_URL=http://192.168.1.10:3000/api
+```
+
+`usesCleartextTraffic` เปิดไว้สำหรับ API HTTP ในการพัฒนาเท่านั้น; ก่อนนำขึ้นใช้งานจริงควรใช้ HTTPS
+
 ## สร้าง repo GitHub และผลักดันโค้ด
 
 1. สร้าง repository ใหม่ใน GitHub ชื่อ `erp-project` หรือชื่อที่ต้องการ

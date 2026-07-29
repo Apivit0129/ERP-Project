@@ -1,11 +1,23 @@
+import 'dart:async' show TimeoutException;
 import 'dart:convert';
+import 'dart:io' show Platform, SocketException;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart'; // ✅ รองรับ Web!
 import '../models/product.dart';
 
 class ApiService {
-  // 💡 ใช้ localhost แทน 127.0.0.1 เพื่อให้ CORS ผ่านบน Chrome ได้ถูกต้อง
-  static const String baseUrl = 'http://localhost:3000/api';
+  // Override ได้ด้วย --dart-define=API_BASE_URL=http://<IP-เครื่อง-server>:3000/api
+  // Android Emulator มอง localhost เป็นตัว emulator เอง จึงต้องเรียกเครื่อง host ผ่าน 10.0.2.2
+  static const String _configuredBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+  );
+
+  static String get baseUrl {
+    if (_configuredBaseUrl.isNotEmpty) return _configuredBaseUrl;
+    if (kIsWeb || !Platform.isAndroid) return 'http://localhost:3000/api';
+    return 'http://10.0.2.2:3000/api';
+  }
 
   // ==========================================
   // ส่วนที่ 1: จัดการ Token และ Login
@@ -37,22 +49,33 @@ class ApiService {
 
   // ล็อกอินและเก็บ Token พร้อมสิทธิ์ผู้ใช้ลง SharedPreferences (รองรับ Web)
   Future<Map<String, dynamic>> login(String username, String password) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/auth/login'),
-      headers: {'Content-Type': 'application/json'},
-      body: json.encode({'username': username, 'password': password}),
-    );
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$baseUrl/auth/login'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({'username': username, 'password': password}),
+          )
+          .timeout(const Duration(seconds: 15));
 
-    final data = json.decode(response.body);
-    if (response.statusCode == 200 && data['success'] == true) {
-      // บันทึก Token และสิทธิ์เก็บไว้ใน SharedPreferences
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('jwt_token', data['token']);
-      await prefs.setString('user_role', data['user']['role']);
-      await prefs.setString('username', data['user']['username']);
-      return data['user'];
-    } else {
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      if (response.statusCode == 200 && data['success'] == true) {
+        // บันทึก Token และสิทธิ์เก็บไว้ใน SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('jwt_token', data['token']);
+        await prefs.setString('user_role', data['user']['role']);
+        await prefs.setString('username', data['user']['username']);
+        return data['user'];
+      }
       throw Exception(data['message'] ?? 'เข้าสู่ระบบไม่สำเร็จ');
+    } on SocketException {
+      throw Exception(
+        'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาเปิด backend และตรวจสอบ API_BASE_URL',
+      );
+    } on FormatException {
+      throw Exception('เซิร์ฟเวอร์ตอบกลับข้อมูลไม่ถูกต้อง');
+    } on TimeoutException {
+      throw Exception('เชื่อมต่อเซิร์ฟเวอร์นานเกินไป กรุณาลองใหม่');
     }
   }
 
