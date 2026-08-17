@@ -1,5 +1,10 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../services/elegant_notification_service.dart';
+import '../widgets/skeleton_loader.dart';
+import '../core/theme/index.dart';
+import '../core/widgets/erp_status_badge.dart';
+import '../core/widgets/erp_section_header.dart';
 
 class PurchaseOrderScreen extends StatefulWidget {
   const PurchaseOrderScreen({super.key});
@@ -64,7 +69,24 @@ class _PurchaseOrderScreenState extends State<PurchaseOrderScreen> {
             return received == item['orderQuantity'];
           });
           return AlertDialog(
-            title: Text('รับสินค้า: ${po['poNumber']}'),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withAlpha(20),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.receipt_long_outlined,
+                      color: AppColors.primary, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text('รับสินค้า: ${po['poNumber']}',
+                      style: AppTextStyles.headingMedium),
+                ),
+              ],
+            ),
             content: SizedBox(
               width: 560,
               child: SingleChildScrollView(
@@ -72,13 +94,14 @@ class _PurchaseOrderScreenState extends State<PurchaseOrderScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('ซัพพลายเออร์: ${po['supplier']['name']}'),
+                    Text('ซัพพลายเออร์: ${po['supplier']['name']}',
+                        style: AppTextStyles.bodyMedium),
                     const SizedBox(height: 12),
                     const Text(
                       'ตรวจนับของที่รับจริงให้ตรงกับใบ PO ก่อนยืนยัน',
                       style: TextStyle(fontWeight: FontWeight.w600),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 12),
                     ...items.map((item) {
                       final product = item['product'] as Map<String, dynamic>;
                       final ordered = item['orderQuantity'] as int;
@@ -90,7 +113,10 @@ class _PurchaseOrderScreenState extends State<PurchaseOrderScreen> {
                         child: Row(
                           children: [
                             Expanded(
-                              child: Text('${product['sku']} — ${product['name']}\nสั่ง: $ordered ชิ้น'),
+                              child: Text(
+                                '${product['sku']} — ${product['name']}\nสั่ง: $ordered ชิ้น',
+                                style: AppTextStyles.bodyMedium,
+                              ),
                             ),
                             const SizedBox(width: 12),
                             SizedBox(
@@ -102,7 +128,6 @@ class _PurchaseOrderScreenState extends State<PurchaseOrderScreen> {
                                 decoration: InputDecoration(
                                   labelText: 'รับจริง',
                                   errorText: mismatch ? 'ไม่ตรง PO' : null,
-                                  border: const OutlineInputBorder(),
                                 ),
                               ),
                             ),
@@ -110,18 +135,41 @@ class _PurchaseOrderScreenState extends State<PurchaseOrderScreen> {
                         ),
                       );
                     }),
-                    if (!isComplete)
-                      const Text(
-                        'ยอดรับต้องตรงกับยอดสั่งทุกสินค้า จึงจะรับเข้าคลังได้',
-                        style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600),
+                    if (!isComplete) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppColors.destructive.withAlpha(20),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppColors.destructive.withAlpha(60)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.warning_amber_outlined,
+                                color: AppColors.destructive, size: 16),
+                            AppSpacing.w(8),
+                            Expanded(
+                              child: Text(
+                                'ยอดรับต้องตรงกับยอดสั่งทุกสินค้า จึงจะรับเข้าคลังได้',
+                                style: AppTextStyles.bodySmall.copyWith(
+                                    color: AppColors.destructive,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
+                    ],
                   ],
                 ),
               ),
             ),
             actions: [
-              TextButton(
-                onPressed: isSubmitting ? null : () => Navigator.pop(dialogContext),
+              OutlinedButton(
+                onPressed: isSubmitting
+                    ? null
+                    : () => Navigator.pop(dialogContext),
                 child: const Text('ยกเลิก'),
               ),
               ElevatedButton.icon(
@@ -133,31 +181,36 @@ class _PurchaseOrderScreenState extends State<PurchaseOrderScreen> {
                           await _apiService.receivePurchaseOrder(
                             po['id'] as int,
                             items
-                                .map((item) => {
-                                      'productId': item['productId'],
-                                      'receivedQuantity': int.parse(
-                                        controllers[item['productId'] as int]!.text,
-                                      ),
-                                    })
+                                .map(
+                                  (item) => {
+                                    'productId': item['productId'],
+                                    'receivedQuantity': int.parse(
+                                      controllers[item['productId'] as int]!
+                                          .text,
+                                    ),
+                                  },
+                                )
                                 .toList(),
                           );
                           if (!context.mounted) return;
                           Navigator.pop(dialogContext);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('รับสินค้า ${po['poNumber']} เข้าคลังเรียบร้อย'),
-                              backgroundColor: Colors.green,
-                            ),
+                          ElegantNotificationService.success(
+                            context,
+                            title: '🎉 สำเร็จ!',
+                            description:
+                                'รับสินค้า ${po['poNumber']} เข้าคลังเรียบร้อย',
                           );
                           _loadPurchaseOrders();
                         } catch (error) {
                           setDialogState(() => isSubmitting = false);
                           if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(error.toString().replaceFirst('Exception: ', '')),
-                                backgroundColor: Colors.red,
-                              ),
+                            ElegantNotificationService.error(
+                              context,
+                              title: 'เกิดข้อผิดพลาด',
+                              description: error.toString().replaceFirst(
+                                    'Exception: ',
+                                    '',
+                                  ),
                             );
                           }
                         }
@@ -166,9 +219,12 @@ class _PurchaseOrderScreenState extends State<PurchaseOrderScreen> {
                     ? const SizedBox(
                         width: 16,
                         height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       )
-                    : const Icon(Icons.inventory),
+                    : const Icon(Icons.inventory_2_outlined, size: 16),
                 label: const Text('ยืนยันรับของเข้าคลัง'),
               ),
             ],
@@ -185,23 +241,16 @@ class _PurchaseOrderScreenState extends State<PurchaseOrderScreen> {
         _poSearch.trim().toLowerCase(),
       );
     }).toList();
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('รับสินค้าเข้า — Purchase Orders'),
-        backgroundColor: Colors.indigo,
-        foregroundColor: Colors.white,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'รีเฟรชรายการ PO',
-            onPressed: _loadPurchaseOrders,
-          ),
-        ],
-      ),
+      backgroundColor: AppColors.background,
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const TableSkeletonLoader(rowCount: 6, columnCount: 4)
           : _errorMessage != null
-              ? Center(child: Text(_errorMessage!, style: const TextStyle(color: Colors.red)))
+              ? ErpErrorState(
+                  message: _errorMessage!,
+                  onRetry: _loadPurchaseOrders,
+                )
               : Column(
                   children: [
                     Padding(
@@ -209,69 +258,106 @@ class _PurchaseOrderScreenState extends State<PurchaseOrderScreen> {
                       child: TextField(
                         onChanged: (value) => setState(() => _poSearch = value),
                         decoration: const InputDecoration(
-                          prefixIcon: Icon(Icons.qr_code_scanner),
-                          labelText: 'สแกนหรือกรอกเลข PO เพื่อค้นหา',
-                          hintText: 'เช่น PO-176...',
-                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.search),
+                          labelText: 'ค้นหาเลขที่ PO',
+                          hintText: 'กรอกเลข PO หรือเลขบิล...',
                         ),
                       ),
                     ),
                     Expanded(
                       child: visibleOrders.isEmpty
-                          ? Center(
-                              child: Text(
-                                _purchaseOrders.isEmpty
-                                    ? 'ไม่มีใบ PO ที่รอรับสินค้า'
-                                    : 'ไม่พบเลข PO ที่สแกน',
-                                style: const TextStyle(fontSize: 16),
-                              ),
+                          ? ErpEmptyState(
+                              icon: Icons.receipt_long_outlined,
+                              title: _purchaseOrders.isEmpty
+                                  ? 'ไม่มีใบ PO ที่รอรับสินค้า'
+                                  : 'ไม่พบเลข PO ที่สแกน',
+                              subtitle: _purchaseOrders.isEmpty
+                                  ? 'ระบบเปิดใบ PO เสร็จสิ้นหมดแล้ว'
+                                  : 'ตรวจสอบเลขอ้างอิงและลองใหม่อีกครั้ง',
                             )
                           : ListView.separated(
                               padding: const EdgeInsets.all(16),
                               itemCount: visibleOrders.length,
-                              separatorBuilder: (_, _) => const SizedBox(height: 10),
+                              separatorBuilder: (_, _) =>
+                                  const SizedBox(height: 12),
                               itemBuilder: (context, index) {
                                 final po = visibleOrders[index];
-                        final items = List<Map<String, dynamic>>.from(po['items'] as List);
-                        return Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    const Icon(Icons.receipt_long, color: Colors.indigo),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        po['poNumber'] as String,
-                                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                                      ),
-                                    ),
-                                    const Chip(label: Text('รอรับสินค้า')),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                Text('ซัพพลายเออร์: ${po['supplier']['name']}'),
-                                const SizedBox(height: 4),
-                                Text(items.map((item) {
-                                  final product = item['product'] as Map<String, dynamic>;
-                                  return '${product['name']} × ${item['orderQuantity']}';
-                                }).join(' • ')),
-                                const SizedBox(height: 14),
-                                Align(
-                                  alignment: Alignment.centerRight,
-                                  child: ElevatedButton.icon(
-                                    onPressed: () => _showReceiveDialog(po),
-                                    icon: const Icon(Icons.qr_code_scanner),
-                                    label: const Text('ตรวจ PO / รับสินค้า'),
+                                final items = List<Map<String, dynamic>>.from(
+                                  po['items'] as List,
+                                );
+                                return Container(
+                                  decoration: BoxDecoration(
+                                    color: AppColors.surface,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: AppColors.cardBorder),
+                                    boxShadow: AppShadows.cardShadow,
                                   ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(16),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            const Icon(
+                                              Icons.receipt_long_outlined,
+                                              color: AppColors.primary,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                po['poNumber'] as String,
+                                                style: AppTextStyles.headingLarge,
+                                              ),
+                                            ),
+                                            const ErpStatusBadge(
+                                              status: ErpStatus.pending,
+                                              customLabel: 'รอรับสินค้า',
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 12),
+                                        RichText(
+                                          text: TextSpan(
+                                            style: AppTextStyles.bodyMedium,
+                                            children: [
+                                              const TextSpan(
+                                                text: 'ซัพพลายเออร์: ',
+                                                style: TextStyle(fontWeight: FontWeight.bold),
+                                              ),
+                                              TextSpan(
+                                                text: '${po['supplier']['name']}',
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          items
+                                              .map((item) {
+                                                final product =
+                                                    item['product']
+                                                        as Map<String, dynamic>;
+                                                return '${product['name']} × ${item['orderQuantity']}';
+                                              })
+                                              .join(' • '),
+                                          style: AppTextStyles.bodySmall,
+                                        ),
+                                        const SizedBox(height: 14),
+                                        Align(
+                                          alignment: Alignment.centerRight,
+                                          child: ElevatedButton.icon(
+                                            onPressed: () => _showReceiveDialog(po),
+                                            icon: const Icon(Icons.qr_code_scanner_outlined, size: 18),
+                                            label: const Text(
+                                              'ตรวจ PO / รับสินค้า',
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
                               },
                             ),
                     ),

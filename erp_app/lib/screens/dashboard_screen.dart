@@ -1,13 +1,18 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'package:provider/provider.dart';
 import '../models/product.dart';
 import '../services/api_service.dart';
-import '../services/auth_provider.dart';
 import '../services/realtime_service.dart';
+import '../services/elegant_notification_service.dart';
 import '../widgets/notification_overlay.dart';
-import 'inventory_screen.dart';
+import '../widgets/skeleton_loader.dart';
+import '../core/theme/app_colors.dart';
+import '../core/theme/app_typography.dart';
+import '../core/theme/app_theme.dart';
+import '../core/widgets/erp_kpi_card.dart';
+import '../core/widgets/erp_status_badge.dart';
+import '../core/widgets/erp_section_header.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -25,9 +30,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   StreamSubscription<bool>? _connectionSubscription;
 
   bool _isLoading = true;
-  bool _isRealtimeConnected = false;
   String? _errorMessage;
   List<Product> _products = [];
+
+  DateTime? _dateRangeStart;
+  DateTime? _dateRangeEnd;
 
   @override
   void initState() {
@@ -38,64 +45,65 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _initRealtimeListeners() {
     _realtimeService.connect();
-    _isRealtimeConnected = _realtimeService.isConnected;
 
-    _connectionSubscription = _realtimeService.connectionStream.listen((connected) {
-      if (mounted) {
-        setState(() {
-          _isRealtimeConnected = connected;
-        });
-      }
-    });
+    _connectionSubscription = _realtimeService.connectionStream.listen((_) {});
 
-    // 💰 ดักฟังออเดอร์ใหม่จาก POS / API
     _orderSubscription = _realtimeService.orderStream.listen((data) {
       if (!mounted) return;
-
       final orderNum = data['orderNumber'] ?? 'N/A';
       final customer = data['customerName'] ?? 'ลูกค้าทั่วไป';
       final total = double.tryParse(data['totalAmount'].toString()) ?? 0.0;
       final createdBy = data['createdBy'] ?? 'พนักงาน';
 
-      // 1. แสดง Live Toast มุมขวาบน
       LiveNotificationService.show(
         context,
         LiveNotification(
           title: 'มีรายการสั่งซื้อใหม่! ($orderNum)',
-          message: '💰 ยอดขาย ฿${total.toStringAsFixed(2)} บาท ($customer)',
+          message: 'ยอดขาย ฿${total.toStringAsFixed(2)} บาท ($customer)',
           subMessage: 'ทำรายการโดย: $createdBy',
           type: NotificationType.newOrder,
         ),
       );
-
-      // 2. รีเฟรชข้อมูลกราฟและสถิติหลังบ้านแบบ Real-time
       _loadDashboardData(silent: true);
     });
 
-    // 📦 ดักฟังการขยับสต๊อก
     _stockSubscription = _realtimeService.stockStream.listen((data) {
       if (!mounted) return;
-
       final sku = data['productSku'] ?? '';
       final name = data['productName'] ?? '';
       final type = data['type'] ?? '';
       final qty = data['quantity'] ?? 0;
       final performedBy = data['performedBy'] ?? 'พนักงาน';
 
-      final typeLabel = type == 'IN' ? 'รับเข้า' : type == 'OUT' ? 'เบิกออก' : 'ปรับสต๊อก';
+      final typeLabel = type == 'IN'
+          ? 'รับเข้า'
+          : type == 'OUT'
+          ? 'เบิกออก'
+          : 'ปรับสต๊อก';
 
       LiveNotificationService.show(
         context,
         LiveNotification(
           title: 'อัปเดตสต๊อกสินค้า ($sku)',
-          message: '📦 $typeLabel $qty ชิ้น ($name)',
+          message: '$typeLabel $qty ชิ้น ($name)',
           subMessage: 'บันทึกโดย: $performedBy',
           type: NotificationType.stockUpdated,
         ),
       );
-
       _loadDashboardData(silent: true);
     });
+  }
+
+  Map<String, double> _getCategoryValueDistribution() {
+    final distribution = <String, double>{};
+    for (final product in _products) {
+      final category = product.sku.length >= 3
+          ? product.sku.substring(0, 3).toUpperCase()
+          : product.sku.toUpperCase();
+      distribution[category] =
+          (distribution[category] ?? 0) + product.totalValue;
+    }
+    return distribution;
   }
 
   @override
@@ -113,7 +121,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _errorMessage = null;
       });
     }
-
     try {
       final data = await _apiService.fetchProducts();
       if (!mounted) return;
@@ -132,97 +139,65 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
-      appBar: AppBar(
-        title: Row(
-          children: [
-            const Icon(Icons.dashboard_customize, color: Colors.white),
-            const SizedBox(width: 10),
-            const Text(
-              'Executive Dashboard',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(width: 12),
-            // 🔴 LIVE WebSocket Indicator
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: _isRealtimeConnected
-                    ? const Color(0xFF22C55E).withValues(alpha: 0.2)
-                    : Colors.red.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: _isRealtimeConnected ? const Color(0xFF22C55E) : Colors.red,
-                  width: 1,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: _isRealtimeConnected ? const Color(0xFF22C55E) : Colors.red,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    _isRealtimeConnected ? '🔴 LIVE WS' : '⚪ CONNECTING...',
-                    style: TextStyle(
-                      color: _isRealtimeConnected ? const Color(0xFF22C55E) : Colors.red.shade200,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        backgroundColor: const Color(0xFF1E293B),
-        foregroundColor: Colors.white,
-        elevation: 4,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () => _loadDashboardData(),
-            tooltip: 'รีเฟรชสถิติ',
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'ออกจากระบบ',
-            onPressed: () {
-              Navigator.pop(context);
-              context.read<AuthProvider>().logout();
-            },
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: _buildBody(),
-    );
+    return Scaffold(backgroundColor: AppColors.background, body: _buildBody());
   }
 
   Widget _buildBody() {
     if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const DashboardSkeletonLoader(cardCount: 4);
     }
 
     if (_errorMessage != null) {
       return Center(
-        child: Text(
-          'เกิดข้อผิดพลาด: $_errorMessage',
-          style: const TextStyle(color: Colors.red),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: AppColors.destructive.withAlpha(18),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: const Icon(
+                Icons.error_outline,
+                color: AppColors.destructive,
+                size: 30,
+              ),
+            ),
+            AppSpacing.gapBase,
+            Text('เกิดข้อผิดพลาด', style: AppTextStyles.headingSmall),
+            AppSpacing.gapSM,
+            Text(_errorMessage!, style: AppTextStyles.bodySmall),
+            AppSpacing.gapLG,
+            OutlinedButton.icon(
+              onPressed: _loadDashboardData,
+              icon: const Icon(Icons.refresh),
+              label: const Text('ลองใหม่'),
+            ),
+          ],
         ),
       );
     }
 
     if (_products.isEmpty) {
-      return const Center(
-        child: Text('ไม่มีข้อมูลสินค้าในระบบ กรุณาเพิ่มสินค้าก่อน'),
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.inventory_2_outlined,
+              size: 48,
+              color: AppColors.mutedForeground,
+            ),
+            AppSpacing.gapBase,
+            Text('ไม่มีข้อมูลสินค้าในระบบ', style: AppTextStyles.headingSmall),
+            Text(
+              'กรุณาเพิ่มสินค้าก่อนใช้งาน Dashboard',
+              style: AppTextStyles.bodySmall,
+            ),
+          ],
+        ),
       );
     }
 
@@ -234,195 +209,253 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final lowStockProducts = _products.where((p) => p.isLowStock).toList();
     final normalStockCount = totalProductsCount - lowStockProducts.length;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // KPI Cards
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final isDesktop = constraints.maxWidth > 800;
-              return GridView.count(
-                crossAxisCount: isDesktop ? 4 : 2,
-                crossAxisSpacing: 16,
-                mainAxisSpacing: 16,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                childAspectRatio: isDesktop ? 2.2 : 1.5,
-                children: [
-                  _buildKpiCard(
-                    'มูลค่าคลังรวม (บาท)',
-                    '฿${totalInventoryValue.toStringAsFixed(0)}',
-                    Icons.account_balance_wallet,
-                    Colors.green,
-                  ),
-                  _buildKpiCard(
-                    'รายการสินค้าทั้งหมด',
-                    '$totalProductsCount SKU',
-                    Icons.category,
-                    Colors.blue,
-                  ),
-                  _buildKpiCard(
-                    'สถานะสต๊อกปกติ',
-                    '$normalStockCount รายการ',
-                    Icons.check_circle_outline,
-                    Colors.teal,
-                  ),
-                  _buildKpiCard(
-                    '⚠️ สินค้าใกล้หมด (ต้องสั่งเพิ่ม)',
-                    '${lowStockProducts.length} รายการ',
-                    Icons.warning_amber_rounded,
-                    Colors.red,
-                    isAlert: lowStockProducts.isNotEmpty,
-                  ),
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 32),
-
-          // Bar Chart
-          const Text(
-            '📊 กราฟวิเคราะห์ปริมาณสต๊อกรายสินค้า (Stock Level Distribution)',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: Color(0xFF1E293B),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Container(
-            height: 350,
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
-                  blurRadius: 10,
-                ),
-              ],
-            ),
-            child: _buildStockBarChart(),
-          ),
-          const SizedBox(height: 32),
-
-          // Low Stock Table
-          if (lowStockProducts.isNotEmpty) ...[
-            const Row(
+    return RefreshIndicator(
+      color: AppColors.primary,
+      onRefresh: _loadDashboardData,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: AppSpacing.screenPadding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Page header row ───────────────────────────
+            Row(
               children: [
-                Icon(Icons.add_alert, color: Colors.red, size: 24),
-                SizedBox(width: 8),
-                Text(
-                  '🚨 รายการสินค้าเฝ้าระวัง (Low Stock Alert - ปริมาณต่ำกว่าเกณฑ์)',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.red,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Dashboard', style: AppTextStyles.displayMedium),
+                      Text(
+                        'ภาพรวมคลังสินค้าแบบ Real-time',
+                        style: AppTextStyles.bodySmall,
+                      ),
+                    ],
                   ),
                 ),
+                // Date range picker
+                _buildDateRangePicker(),
               ],
             ),
-            const SizedBox(height: 16),
-            _buildLowStockTable(lowStockProducts),
+            AppSpacing.gapXL,
+
+            // ── KPI Grid ──────────────────────────────────
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isDesktop = constraints.maxWidth > 700;
+                return GridView.count(
+                  crossAxisCount: isDesktop ? 4 : 2,
+                  crossAxisSpacing: AppSpacing.base,
+                  mainAxisSpacing: AppSpacing.base,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  childAspectRatio: isDesktop ? 1.7 : 1.4,
+                  children: [
+                    ErpKpiCard(
+                      title: 'มูลค่าคลังรวม',
+                      value: '฿${_formatNumber(totalInventoryValue)}',
+                      subtitle: 'บาท',
+                      icon: Icons.account_balance_wallet_outlined,
+                      iconColor: AppColors.success,
+                      iconBackground: AppColors.success.withAlpha(20),
+                    ),
+                    ErpKpiCard(
+                      title: 'รายการสินค้า',
+                      value: '$totalProductsCount',
+                      subtitle: 'SKU ทั้งหมด',
+                      icon: Icons.inventory_2_outlined,
+                      iconColor: AppColors.primary,
+                      iconBackground: AppColors.primary.withAlpha(20),
+                    ),
+                    ErpKpiCard(
+                      title: 'สต๊อกปกติ',
+                      value: '$normalStockCount',
+                      subtitle: 'รายการ',
+                      icon: Icons.check_circle_outline_rounded,
+                      iconColor: AppColors.info,
+                      iconBackground: AppColors.info.withAlpha(20),
+                    ),
+                    ErpKpiCard(
+                      title: 'สินค้าใกล้หมด',
+                      value: '${lowStockProducts.length}',
+                      subtitle: 'ต้องสั่งเพิ่ม',
+                      icon: Icons.warning_amber_rounded,
+                      iconColor: lowStockProducts.isNotEmpty
+                          ? AppColors.destructive
+                          : AppColors.warning,
+                      iconBackground: lowStockProducts.isNotEmpty
+                          ? AppColors.destructive.withAlpha(20)
+                          : AppColors.warning.withAlpha(20),
+                    ),
+                  ],
+                );
+              },
+            ),
+
+            // ── Bar Chart ─────────────────────────────────
+            ErpSectionHeader(
+              title: 'ปริมาณสต๊อกรายสินค้า',
+              subtitle: 'Stock Level Distribution',
+              icon: Icons.bar_chart_rounded,
+            ),
+            _buildChartCard(height: 320, child: _buildStockBarChart()),
+
+            // ── Pie Chart ─────────────────────────────────
+            ErpSectionHeader(
+              title: 'สัดส่วนมูลค่าตามหมวดหมู่',
+              subtitle: 'Category Value Distribution',
+              icon: Icons.pie_chart_outline_rounded,
+            ),
+            _buildChartCard(height: 320, child: _buildCategoryPieChart()),
+
+            // ── Low Stock Alert Table ─────────────────────
+            if (lowStockProducts.isNotEmpty) ...[
+              ErpSectionHeader(
+                title: 'รายการสินค้าเฝ้าระวัง',
+                subtitle: 'สินค้าที่ต้องสั่งเพิ่มด่วน',
+                icon: Icons.notification_important_outlined,
+              ),
+              _buildLowStockTable(lowStockProducts),
+            ],
+
+            AppSpacing.gapXL2,
           ],
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildKpiCard(
-    String title,
-    String value,
-    IconData icon,
-    Color color, {
-    bool isAlert = false,
-  }) {
+  Widget _buildDateRangePicker() {
+    return OutlinedButton.icon(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppColors.foreground,
+        side: const BorderSide(color: AppColors.border),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      ),
+      icon: const Icon(Icons.date_range_outlined, size: 17),
+      label: Text(
+        _dateRangeStart != null
+            ? '${_dateRangeStart!.day}/${_dateRangeStart!.month} - ${_dateRangeEnd!.day}/${_dateRangeEnd!.month}'
+            : '7 วันล่าสุด',
+        style: AppTextStyles.labelMedium,
+      ),
+      onPressed: () async {
+        final today = DateTime.now();
+        final sevenDaysAgo = today.subtract(const Duration(days: 7));
+        final picked = await showDateRangePicker(
+          context: context,
+          firstDate: DateTime(2024),
+          lastDate: today,
+          initialDateRange: _dateRangeStart != null
+              ? DateTimeRange(start: _dateRangeStart!, end: _dateRangeEnd!)
+              : DateTimeRange(start: sevenDaysAgo, end: today),
+          builder: (context, child) => Theme(
+            data: Theme.of(context).copyWith(
+              colorScheme: Theme.of(
+                context,
+              ).colorScheme.copyWith(primary: AppColors.primary),
+            ),
+            child: child!,
+          ),
+        );
+        if (picked != null) {
+          setState(() {
+            _dateRangeStart = picked.start;
+            _dateRangeEnd = picked.end;
+          });
+        }
+      },
+    );
+  }
+
+  Widget _buildChartCard({required double height, required Widget child}) {
     return Container(
+      height: height,
+      margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: isAlert ? Colors.red.shade50 : Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: isAlert ? Border.all(color: Colors.red, width: 2) : null,
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10),
-        ],
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.cardBorder),
+        boxShadow: AppShadows.cardShadow,
       ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 28,
-            backgroundColor: color.withValues(alpha: 0.15),
-            child: Icon(icon, color: color, size: 32),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    color: Colors.grey.shade600,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  value,
-                  style: TextStyle(
-                    color: isAlert ? Colors.red : const Color(0xFF1E293B),
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+      child: child,
     );
   }
 
+  // ── Bar Chart ─────────────────────────────────────────────
   Widget _buildStockBarChart() {
+    if (_products.isEmpty) return const SizedBox();
+
+    final maxStock = _products
+        .map((p) => p.currentStock)
+        .reduce((a, b) => a > b ? a : b)
+        .toDouble();
+
     return BarChart(
       BarChartData(
         alignment: BarChartAlignment.spaceAround,
-        maxY: (_products
-                    .map((p) => p.currentStock)
-                    .reduce((a, b) => a > b ? a : b) +
-                10)
-            .toDouble(),
-        barTouchData: BarTouchData(enabled: true),
+        maxY: maxStock + (maxStock * 0.15),
+        barTouchData: BarTouchData(
+          enabled: true,
+          touchTooltipData: BarTouchTooltipData(
+            direction: TooltipDirection.auto,
+            getTooltipItem: (group, groupIndex, rod, rodIndex) {
+              final product = _products[groupIndex];
+              return BarTooltipItem(
+                '${product.name}\n${product.currentStock} ชิ้น',
+                AppTextStyles.bodySmall.copyWith(
+                  color: Colors.white,
+                  height: 1.6,
+                ),
+              );
+            },
+          ),
+        ),
         titlesData: FlTitlesData(
           show: true,
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
+              reservedSize: 40,
               getTitlesWidget: (double value, TitleMeta meta) {
                 final index = value.toInt();
                 if (index < 0 || index >= _products.length) {
                   return const SizedBox();
                 }
                 return Padding(
-                  padding: const EdgeInsets.only(top: 8.0),
-                  child: Text(
-                    _products[index].sku,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  padding: const EdgeInsets.only(top: 6.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _products[index].sku,
+                        style: AppTextStyles.labelSmall.copyWith(
+                          fontFamily: 'FiraCode',
+                          fontSize: 10,
+                        ),
+                      ),
+                      if (_products[index].isLowStock)
+                        const Icon(
+                          Icons.warning_amber_rounded,
+                          size: 10,
+                          color: AppColors.warning,
+                        ),
+                    ],
                   ),
                 );
               },
             ),
           ),
-          leftTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: true, reservedSize: 40),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 40,
+              getTitlesWidget: (value, meta) => Text(
+                value.toInt().toString(),
+                style: AppTextStyles.labelSmall,
+              ),
+            ),
           ),
           topTitles: const AxisTitles(
             sideTitles: SideTitles(showTitles: false),
@@ -431,21 +464,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
             sideTitles: SideTitles(showTitles: false),
           ),
         ),
-        gridData: const FlGridData(show: true, drawVerticalLine: false),
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          getDrawingHorizontalLine: (_) =>
+              FlLine(color: AppColors.border, strokeWidth: 1),
+        ),
         borderData: FlBorderData(show: false),
         barGroups: _products.asMap().entries.map((entry) {
-          final index = entry.key;
           final product = entry.value;
-          final barColor = product.isLowStock
-              ? Colors.redAccent
-              : Colors.blueAccent;
+          final stockPct = product.currentStock / maxStock;
+          Color barColor;
+          if (product.isLowStock) {
+            barColor = AppColors.destructive;
+          } else if (stockPct > 0.75) {
+            barColor = AppColors.success;
+          } else if (stockPct > 0.50) {
+            barColor = AppColors.primary;
+          } else {
+            barColor = AppColors.warning;
+          }
           return BarChartGroupData(
-            x: index,
+            x: entry.key,
             barRods: [
               BarChartRodData(
                 toY: product.currentStock.toDouble(),
                 color: barColor,
-                width: 24,
+                width: 18,
                 borderRadius: const BorderRadius.vertical(
                   top: Radius.circular(6),
                 ),
@@ -457,55 +502,153 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  // ── Pie Chart ─────────────────────────────────────────────
+  Widget _buildCategoryPieChart() {
+    final categoryDistribution = _getCategoryValueDistribution();
+
+    if (categoryDistribution.isEmpty) {
+      return const Center(child: Text('ไม่มีข้อมูลหมวดหมู่สินค้า'));
+    }
+
+    final totalValue = categoryDistribution.values.fold<double>(
+      0,
+      (a, b) => a + b,
+    );
+
+    final chartColors = [
+      AppColors.chart1,
+      AppColors.chart2,
+      AppColors.chart3,
+      AppColors.chart4,
+      AppColors.chart5,
+      AppColors.chart6,
+      AppColors.primaryLight,
+      AppColors.info,
+    ];
+
+    final entries = categoryDistribution.entries.toList();
+
+    final sections = entries.asMap().entries.map((e) {
+      final idx = e.key;
+      final entry = e.value;
+      final pct = entry.value / totalValue * 100;
+      return PieChartSectionData(
+        color: chartColors[idx % chartColors.length],
+        value: entry.value,
+        title: '${pct.toStringAsFixed(1)}%',
+        radius: 90,
+        titleStyle: AppTextStyles.labelSmall.copyWith(color: Colors.white),
+      );
+    }).toList();
+
+    return Row(
+      children: [
+        Expanded(
+          flex: 3,
+          child: PieChart(
+            PieChartData(
+              sections: sections,
+              centerSpaceRadius: 44,
+              sectionsSpace: 2,
+            ),
+          ),
+        ),
+        Expanded(
+          flex: 2,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: entries.asMap().entries.map((e) {
+                final idx = e.key;
+                final entry = e.value;
+                final pct = entry.value / totalValue * 100;
+                final color = chartColors[idx % chartColors.length];
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: color,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      AppSpacing.w(8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              entry.key,
+                              style: AppTextStyles.labelMedium.copyWith(
+                                fontFamily: 'FiraCode',
+                              ),
+                            ),
+                            Text(
+                              '฿${_formatNumber(entry.value)} (${pct.toStringAsFixed(1)}%)',
+                              style: AppTextStyles.bodySmall.copyWith(
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Low Stock Table ───────────────────────────────────────
   Widget _buildLowStockTable(List<Product> lowStockProducts) {
     return Container(
-      width: double.infinity,
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10),
-        ],
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.destructive.withAlpha(50)),
+        boxShadow: AppShadows.cardShadow,
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         child: SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: DataTable(
-            headingRowColor: WidgetStateProperty.all(Colors.red.shade50),
-            columns: const [
+            headingRowColor: WidgetStateProperty.all(
+              AppColors.destructive.withAlpha(12),
+            ),
+            columns: [
               DataColumn(
                 label: Text(
                   'รหัส SKU',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-              DataColumn(
-                label: Text(
-                  'ชื่อสินค้า',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-              DataColumn(
-                label: Text(
-                  'คงเหลือในคลัง',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.red,
+                  style: AppTextStyles.headingSmall.copyWith(
+                    fontFamily: 'FiraCode',
                   ),
                 ),
               ),
               DataColumn(
-                label: Text(
-                  'สถานะ',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
+                label: Text('ชื่อสินค้า', style: AppTextStyles.headingSmall),
               ),
               DataColumn(
                 label: Text(
-                  'จัดการ (Action)',
-                  style: TextStyle(fontWeight: FontWeight.bold),
+                  'คงเหลือ',
+                  style: AppTextStyles.headingSmall.copyWith(
+                    color: AppColors.destructive,
+                  ),
                 ),
+              ),
+              DataColumn(
+                label: Text('สถานะ', style: AppTextStyles.headingSmall),
+              ),
+              DataColumn(
+                label: Text('Action', style: AppTextStyles.headingSmall),
               ),
             ],
             rows: lowStockProducts.map((product) {
@@ -514,55 +657,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   DataCell(
                     Text(
                       product.sku,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+                      style: AppTextStyles.kpiSmall.copyWith(
+                        fontFamily: 'FiraCode',
+                        color: AppColors.foreground,
+                      ),
                     ),
                   ),
-                  DataCell(Text(product.name)),
+                  DataCell(Text(product.name, style: AppTextStyles.bodyMedium)),
                   DataCell(
                     Text(
                       '${product.currentStock} ชิ้น',
-                      style: const TextStyle(
-                        color: Colors.red,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
+                      style: AppTextStyles.kpiMedium.copyWith(
+                        color: AppColors.destructive,
                       ),
                     ),
                   ),
+                  DataCell(ErpStatusBadge.fromString('LOW_STOCK')),
                   DataCell(
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.red,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: const Text(
-                        'ต้องสั่งเพิ่ม!',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ),
-                  DataCell(
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue.shade800,
-                        foregroundColor: Colors.white,
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.primary,
+                        side: const BorderSide(color: AppColors.primary),
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
+                          horizontal: 10,
+                          vertical: 6,
                         ),
+                        minimumSize: const Size(0, 36),
                       ),
-                      icon: const Icon(Icons.add_shopping_cart, size: 16),
-                      label: const Text(
-                        'ออกใบ PO',
-                        style: TextStyle(fontSize: 12),
+                      icon: const Icon(
+                        Icons.add_shopping_cart_outlined,
+                        size: 15,
                       ),
+                      label: Text('ออกใบ PO', style: AppTextStyles.labelMedium),
                       onPressed: () => _showCreatePODialog(product),
                     ),
                   ),
@@ -575,24 +701,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  // ── Create PO Dialog ──────────────────────────────────────
   void _showCreatePODialog(Product product) async {
     List<Map<String, dynamic>> suppliers = [];
     try {
       suppliers = await _apiService.fetchSuppliers();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('โหลดซัพพลายเออร์ล้มเหลว: $e')),
+      ElegantNotificationService.error(
+        context,
+        title: 'โหลดข้อมูลล้มเหลว',
+        description: 'ไม่สามารถโหลดรายชื่อซัพพลายเออร์: $e',
       );
       return;
     }
 
     if (suppliers.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'ไม่พบรายชื่อซัพพลายเออร์ในระบบ (กรุณาเพิ่มใน Database ก่อน)',
-          ),
-        ),
+      ElegantNotificationService.warning(
+        context,
+        title: 'ไม่พบข้อมูล',
+        description:
+            'ไม่พบรายชื่อซัพพลายเออร์ในระบบ กรุณาเพิ่มใน Database ก่อน',
       );
       return;
     }
@@ -612,77 +740,140 @@ class _DashboardScreenState extends State<DashboardScreen> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: Text('📄 ออกใบสั่งซื้อ (PO) - ${product.name}'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
+              title: Row(
                 children: [
-                  DropdownButtonFormField<int>(
-                    decoration: const InputDecoration(
-                      labelText: 'เลือกบริษัทซัพพลายเออร์',
-                      border: OutlineInputBorder(),
-                    ),
-                    value: selectedSupplierId,
-                    items: suppliers.map((sup) {
-                      return DropdownMenuItem<int>(
-                        value: sup['id'],
-                        child: Text(sup['name']),
-                      );
-                    }).toList(),
-                    onChanged: (val) {
-                      if (val != null) {
-                        setDialogState(() => selectedSupplierId = val);
-                      }
-                    },
+                  const Icon(
+                    Icons.receipt_long_outlined,
+                    color: AppColors.primary,
+                    size: 22,
                   ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: qtyController,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'จำนวนที่สั่ง (ชิ้น)',
-                            prefixIcon: Icon(Icons.numbers),
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: TextFormField(
-                          controller: costController,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            labelText: 'ต้นทุน/ชิ้น (บาท)',
-                            prefixIcon: Icon(Icons.money),
-                            border: OutlineInputBorder(),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    '⚠️ หมายเหตุ: การออก PO จะยังไม่เพิ่มสต๊อกในคลัง จนกว่าพนักงานคลังจะกด "รับของ" ตามใบ PO',
-                    style: TextStyle(
-                      color: Colors.orange,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
+                  AppSpacing.w(10),
+                  Expanded(
+                    child: Text(
+                      'ออกใบสั่งซื้อ (PO)',
+                      style: AppTextStyles.headingMedium,
                     ),
                   ),
                 ],
               ),
+              content: SizedBox(
+                width: 480,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.muted,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.inventory_2_outlined,
+                            size: 16,
+                            color: AppColors.primary,
+                          ),
+                          AppSpacing.w(8),
+                          Text(
+                            product.name,
+                            style: AppTextStyles.bodyMedium.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    AppSpacing.gapBase,
+                    DropdownButtonFormField<int>(
+                      decoration: const InputDecoration(
+                        labelText: 'ซัพพลายเออร์',
+                        prefixIcon: Icon(Icons.business_outlined, size: 18),
+                      ),
+                      value: selectedSupplierId,
+                      items: suppliers.map((sup) {
+                        return DropdownMenuItem<int>(
+                          value: sup['id'],
+                          child: Text(sup['name']),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setDialogState(() => selectedSupplierId = val);
+                        }
+                      },
+                    ),
+                    AppSpacing.gapBase,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: qtyController,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'จำนวนสั่ง (ชิ้น)',
+                              prefixIcon: Icon(
+                                Icons.numbers_outlined,
+                                size: 18,
+                              ),
+                            ),
+                          ),
+                        ),
+                        AppSpacing.w(12),
+                        Expanded(
+                          child: TextFormField(
+                            controller: costController,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'ต้นทุน/ชิ้น (฿)',
+                              prefixIcon: Icon(
+                                Icons.monetization_on_outlined,
+                                size: 18,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    AppSpacing.gapBase,
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppColors.warning.withAlpha(18),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: AppColors.warning.withAlpha(60),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.info_outline,
+                            color: AppColors.warning,
+                            size: 16,
+                          ),
+                          AppSpacing.w(8),
+                          Expanded(
+                            child: Text(
+                              'การออก PO จะยังไม่เพิ่มสต๊อก จนกว่าพนักงานคลังจะกด "รับของ"',
+                              style: AppTextStyles.bodySmall.copyWith(
+                                color: AppColors.warning,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               actions: [
-                TextButton(
+                OutlinedButton(
                   onPressed: () => Navigator.pop(ctx),
                   child: const Text('ยกเลิก'),
                 ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue.shade800,
-                    foregroundColor: Colors.white,
-                  ),
+                ElevatedButton.icon(
                   onPressed: isSubmitting
                       ? null
                       : () async {
@@ -698,33 +889,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 },
                               ],
                             );
-
                             if (ctx.mounted) {
                               Navigator.pop(ctx);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
-                                    '🎉 ส่งใบสั่งซื้อ (PO) ไปให้ซัพพลายเออร์เรียบร้อยแล้ว!',
-                                  ),
-                                  backgroundColor: Colors.green,
-                                ),
+                              ElegantNotificationService.success(
+                                context,
+                                title: 'สร้างใบสั่งซื้อสำเร็จ',
+                                description:
+                                    'ส่ง PO ให้ซัพพลายเออร์เรียบร้อยแล้ว',
                               );
                             }
                           } catch (e) {
                             setDialogState(() => isSubmitting = false);
                             if (ctx.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(e.toString()),
-                                  backgroundColor: Colors.red,
-                                ),
+                              ElegantNotificationService.error(
+                                context,
+                                title: 'เกิดข้อผิดพลาด',
+                                description: e.toString(),
                               );
                             }
                           }
                         },
-                  child: isSubmitting
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text('ยืนยันสร้างใบสั่งซื้อ'),
+                  icon: isSubmitting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.send_outlined, size: 16),
+                  label: const Text('ยืนยันสร้างใบสั่งซื้อ'),
                 ),
               ],
             );
@@ -732,5 +927,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         );
       },
     );
+  }
+
+  // ── Helpers ───────────────────────────────────────────────
+  String _formatNumber(double value) {
+    if (value >= 1000000) {
+      return '${(value / 1000000).toStringAsFixed(1)}M';
+    } else if (value >= 1000) {
+      return '${(value / 1000).toStringAsFixed(1)}k';
+    }
+    return value.toStringAsFixed(0);
   }
 }

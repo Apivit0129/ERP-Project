@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/product.dart';
 import '../services/api_service.dart';
 import '../services/auth_provider.dart';
+import '../services/elegant_notification_service.dart';
 import '../services/pdf_invoice_service.dart';
+import '../widgets/skeleton_loader.dart';
+import '../core/theme/index.dart';
 
 class PosScreen extends StatefulWidget {
   const PosScreen({super.key});
@@ -31,6 +35,12 @@ class _PosScreenState extends State<PosScreen> {
     _loadProducts();
   }
 
+  @override
+  void dispose() {
+    _customerController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadProducts() async {
     setState(() => _isLoading = true);
     try {
@@ -43,11 +53,10 @@ class _PosScreenState extends State<PosScreen> {
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('ดึงข้อมูลสินค้าล้มเหลว: $e'),
-            backgroundColor: Colors.red,
-          ),
+        ElegantNotificationService.error(
+          context,
+          title: 'เกิดข้อมูล',
+          description: 'ดึงข้อมูลสินค้าล้มเหลว: $e',
         );
       }
     }
@@ -61,13 +70,11 @@ class _PosScreenState extends State<PosScreen> {
         if (_cart[product.id]!['quantity'] < product.currentStock) {
           _cart[product.id]!['quantity'] += 1;
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'ไม่สามารถหยิบเพิ่มได้เนื่องจากสต๊อกมีเพียง ${product.currentStock} ชิ้น',
-              ),
-              backgroundColor: Colors.orange,
-            ),
+          ElegantNotificationService.warning(
+            context,
+            title: '🗐️ สตอกไม่เพิ่ม',
+            description:
+                'ไม่สามารถหยิบเพิ่มได้เนื่องจากสตอกมีเพิ่ม ${product.currentStock} ชิ้น',
           );
         }
       } else {
@@ -109,20 +116,18 @@ class _PosScreenState extends State<PosScreen> {
   // =========================================================================
   Future<void> _handleCheckout() async {
     if (_cart.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('กรุณาเลือกสินค้าลงตะกร้าก่อน'),
-          backgroundColor: Colors.orange,
-        ),
+      ElegantNotificationService.warning(
+        context,
+        title: '📑 กรุณาเลือกสินค้า',
+        description: 'กรุณาเลือกสินค้าลงตะกร้าก่อน',
       );
       return;
     }
     if (_customerController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('กรุณาระบุชื่อลูกค้า'),
-          backgroundColor: Colors.orange,
-        ),
+      ElegantNotificationService.warning(
+        context,
+        title: '📑 กรุณาระบุชื่อลูกค้า',
+        description: 'กรุณาระบุชื่อลูกค้า',
       );
       return;
     }
@@ -156,6 +161,7 @@ class _PosScreenState extends State<PosScreen> {
       }).toList();
 
       final totalForPdf = _totalAmount; // เก็บค่าก่อน clear cart
+      if (!mounted) return;
       final seller = context.read<AuthProvider>().username ?? 'Staff';
       final orderNo = orderData['orderNumber'] ?? 'INV-MOCK-001';
 
@@ -167,11 +173,10 @@ class _PosScreenState extends State<PosScreen> {
       _loadProducts();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('🎉 เปิดบิล $orderNo สำเร็จ! กำลังสร้างไฟล์ PDF...'),
-            backgroundColor: Colors.green,
-          ),
+        ElegantNotificationService.success(
+          context,
+          title: '🎉 สำเร็จ!',
+          description: 'เปิดบิล $orderNo สำเร็จ! กำลังสร้างไฟล์ PDF...',
         );
       }
 
@@ -186,11 +191,10 @@ class _PosScreenState extends State<PosScreen> {
     } catch (e) {
       setState(() => _isSubmitting = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('เกิดข้อผิดพลาด: $e'),
-            backgroundColor: Colors.red,
-          ),
+        ElegantNotificationService.error(
+          context,
+          title: 'เกิดข้อผิดพลาด',
+          description: e.toString(),
         );
       }
     }
@@ -199,13 +203,9 @@ class _PosScreenState extends State<PosScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('🛒 เปิดบิลคำสั่งซื้อ (Sales Order & POS)'),
-        backgroundColor: const Color(0xFF1E293B),
-        foregroundColor: Colors.white,
-      ),
+      backgroundColor: AppColors.background,
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const GridSkeletonLoader(itemCount: 12, crossAxisCount: 3)
           : LayoutBuilder(
               builder: (context, constraints) {
                 // ถ้าเป็นหน้าจอกว้าง (เช่น Web Chrome) ให้แบ่งจอ ซ้าย-ขวา
@@ -237,21 +237,34 @@ class _PosScreenState extends State<PosScreen> {
   // ฝั่งซ้าย: รายการสินค้า
   Widget _buildProductCatalog() {
     return Container(
-      color: const Color(0xFFF8FAFC),
+      color: AppColors.background,
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            '📦 เลือกสินค้าลงตะกร้า (แตะที่สินค้า)',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withAlpha(20),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.apps_rounded, color: AppColors.primary, size: 20),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                'เลือกสินค้าลงตะกร้า',
+                style: AppTextStyles.headingLarge,
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           Expanded(
             child: GridView.builder(
               gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                 maxCrossAxisExtent: 220,
-                childAspectRatio: 0.9,
+                childAspectRatio: 0.85,
                 crossAxisSpacing: 12,
                 mainAxisSpacing: 12,
               ),
@@ -259,11 +272,18 @@ class _PosScreenState extends State<PosScreen> {
               itemBuilder: (context, index) {
                 final product = _products[index];
                 final inCartQty = _cart[product.id]?['quantity'] ?? 0;
+                final hasInCart = inCartQty > 0;
 
-                return Card(
-                  elevation: 2,
-                  shape: RoundedRectangleBorder(
+                return AnimatedContainer(
+                  duration: AppDurations.fast,
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
                     borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: hasInCart ? AppColors.primary : AppColors.cardBorder,
+                      width: hasInCart ? 2 : 1,
+                    ),
+                    boxShadow: AppShadows.cardShadow,
                   ),
                   child: InkWell(
                     borderRadius: BorderRadius.circular(12),
@@ -276,24 +296,26 @@ class _PosScreenState extends State<PosScreen> {
                           Stack(
                             alignment: Alignment.topRight,
                             children: [
-                              const CircleAvatar(
-                                radius: 28,
-                                backgroundColor: Color(0xFFE3F2FD),
+                              CircleAvatar(
+                                radius: 26,
+                                backgroundColor: hasInCart
+                                    ? AppColors.primary.withAlpha(20)
+                                    : AppColors.muted,
                                 child: Icon(
-                                  Icons.shopping_bag,
-                                  color: Colors.blueAccent,
-                                  size: 28,
+                                  Icons.shopping_bag_outlined,
+                                  color: hasInCart ? AppColors.primary : AppColors.mutedForeground,
+                                  size: 24,
                                 ),
                               ),
-                              if (inCartQty > 0)
+                              if (hasInCart)
                                 CircleAvatar(
-                                  radius: 12,
-                                  backgroundColor: Colors.green,
+                                  radius: 11,
+                                  backgroundColor: AppColors.success,
                                   child: Text(
                                     '$inCartQty',
                                     style: const TextStyle(
                                       color: Colors.white,
-                                      fontSize: 12,
+                                      fontSize: 11,
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
@@ -303,7 +325,7 @@ class _PosScreenState extends State<PosScreen> {
                           const SizedBox(height: 8),
                           Text(
                             product.name,
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+                            style: AppTextStyles.headingSmall,
                             textAlign: TextAlign.center,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
@@ -311,17 +333,15 @@ class _PosScreenState extends State<PosScreen> {
                           const SizedBox(height: 4),
                           Text(
                             '฿${product.price.toStringAsFixed(2)}',
-                            style: const TextStyle(
-                              color: Colors.green,
-                              fontWeight: FontWeight.w600,
+                            style: AppTextStyles.kpiMedium.copyWith(
+                              color: AppColors.success,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
+                          const SizedBox(height: 2),
                           Text(
                             'เหลือ: ${product.currentStock} ชิ้น',
-                            style: TextStyle(
-                              color: Colors.grey.shade600,
-                              fontSize: 11,
-                            ),
+                            style: AppTextStyles.bodySmall,
                           ),
                         ],
                       ),
@@ -339,24 +359,34 @@ class _PosScreenState extends State<PosScreen> {
   // ฝั่งขวา: ตะกร้าสินค้าและปุ่มเปิดบิล
   Widget _buildCartSection() {
     return Container(
-      color: Colors.white,
+      color: AppColors.surface,
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            '🧾 รายการคำสั่งซื้อปัจจุบัน',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withAlpha(20),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.shopping_cart_outlined, color: AppColors.primary, size: 20),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                'รายการคำสั่งซื้อปัจจุบัน',
+                style: AppTextStyles.headingLarge,
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           TextFormField(
             controller: _customerController,
             decoration: const InputDecoration(
               labelText: 'ชื่อลูกค้า / บริษัท',
-              prefixIcon: Icon(Icons.person),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.all(Radius.circular(8)),
-              ),
+              prefixIcon: Icon(Icons.person_outline),
             ),
           ),
           const SizedBox(height: 12),
@@ -365,11 +395,22 @@ class _PosScreenState extends State<PosScreen> {
           // รายการในตะกร้า
           Expanded(
             child: _cart.isEmpty
-                ? const Center(
-                    child: Text(
-                      'ตะกร้าสินค้าว่างเปล่า\nกรุณาเลือกสินค้าจากฝั่งซ้าย',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.shopping_cart_outlined,
+                          size: 48,
+                          color: AppColors.mutedForeground.withAlpha(128),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'ตะกร้าสินค้าว่างเปล่า\nกรุณาเลือกสินค้าจากฝั่งซ้าย',
+                          textAlign: TextAlign.center,
+                          style: AppTextStyles.bodySmall,
+                        ),
+                      ],
                     ),
                   )
                 : ListView.builder(
@@ -380,43 +421,46 @@ class _PosScreenState extends State<PosScreen> {
                       final product = item['product'] as Product;
                       final qty = item['quantity'] as int;
 
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(
-                          product.name,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        decoration: BoxDecoration(
+                          color: AppColors.background,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppColors.border),
+                        ),
+                        child: ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          title: Text(
+                            product.name,
+                            style: AppTextStyles.headingSmall,
                           ),
-                        ),
-                        subtitle: Text(
-                          '฿${product.price.toStringAsFixed(2)} x $qty = ฿${(product.price * qty).toStringAsFixed(2)}',
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(
-                                Icons.remove_circle_outline,
-                                color: Colors.red,
+                          subtitle: Text(
+                            '฿${product.price.toStringAsFixed(2)} x $qty = ฿${(product.price * qty).toStringAsFixed(2)}',
+                            style: AppTextStyles.bodySmall,
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.remove_circle_outline_rounded,
+                                  color: AppColors.destructive,
+                                ),
+                                onPressed: () => _updateQuantity(product.id, -1),
                               ),
-                              onPressed: () => _updateQuantity(product.id, -1),
-                            ),
-                            Text(
-                              '$qty',
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
+                              Text(
+                                '$qty',
+                                style: AppTextStyles.bodyMedium.copyWith(fontWeight: FontWeight.bold),
                               ),
-                            ),
-                            IconButton(
-                              icon: const Icon(
-                                Icons.add_circle_outline,
-                                color: Colors.green,
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.add_circle_outline_rounded,
+                                  color: AppColors.success,
+                                ),
+                                onPressed: () => _updateQuantity(product.id, 1),
                               ),
-                              onPressed: () => _updateQuantity(product.id, 1),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       );
                     },
@@ -428,16 +472,15 @@ class _PosScreenState extends State<PosScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
+              Text(
                 'ยอดรวมทั้งสิ้น:',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                style: AppTextStyles.headingLarge,
               ),
               Text(
                 '฿${_totalAmount.toStringAsFixed(2)}',
-                style: const TextStyle(
-                  fontSize: 22,
+                style: AppTextStyles.kpiLarge.copyWith(
+                  color: AppColors.success,
                   fontWeight: FontWeight.bold,
-                  color: Colors.green,
                 ),
               ),
             ],
@@ -445,12 +488,12 @@ class _PosScreenState extends State<PosScreen> {
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
-            height: 54,
+            height: 52,
             child: ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
+                backgroundColor: AppColors.accent,
                 foregroundColor: Colors.white,
-                elevation: 4,
+                elevation: 2,
               ),
               onPressed: _isSubmitting ? null : _handleCheckout,
               icon: _isSubmitting
@@ -462,15 +505,11 @@ class _PosScreenState extends State<PosScreen> {
                         strokeWidth: 2,
                       ),
                     )
-                  : const Icon(Icons.print, size: 26),
+                  : const Icon(Icons.print_outlined, size: 24),
               label: Text(
                 _isSubmitting
                     ? 'กำลังบันทึกและสร้าง PDF...'
                     : 'ยืนยันคำสั่งซื้อ & พิมพ์ใบเสร็จ PDF',
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
               ),
             ),
           ),

@@ -1,25 +1,13 @@
 import 'dart:async';
-import 'package:provider/provider.dart';
-import '../services/auth_provider.dart';
-import 'dashboard_screen.dart';
-import 'pos_screen.dart';
-import 'purchase_order_screen.dart';
 import 'package:flutter/material.dart';
 import '../models/product.dart';
 import '../services/api_service.dart';
 import '../services/realtime_service.dart';
-
-// ============================================================
-// Design tokens
-// ============================================================
-const _kPrimary = Color(0xFF3B82F6);
-const _kPrimaryDark = Color(0xFF1D4ED8);
-const _kSurface = Color(0xFFF8FAFC);
-const _kTextPrimary = Color(0xFF0F172A);
-const _kTextSecondary = Color(0xFF64748B);
-const _kLowStockColor = Color(0xFFEF4444);
-const _kInStockColor = Color(0xFF22C55E);
-const _kWarningColor = Color(0xFFF59E0B);
+import '../services/elegant_notification_service.dart';
+import '../widgets/skeleton_loader.dart';
+import '../core/theme/index.dart';
+import '../core/widgets/erp_status_badge.dart';
+import '../core/widgets/erp_section_header.dart';
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -62,16 +50,16 @@ class _InventoryScreenState extends State<InventoryScreen>
     super.initState();
     _fadeController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 300),
+      duration: AppDurations.normal,
     );
     _fadeAnimation = CurvedAnimation(
       parent: _fadeController,
-      curve: Curves.easeInOut,
+      curve: AppDurations.defaultCurve,
     );
     _dataSource = _ProductDataSource(onSelect: _showStockMovementBottomSheet);
     _loadProducts();
 
-    // 🔌 Realtime listeners for Inventory Screen
+    // 🔌 Realtime listeners
     _realtimeService.connect();
     _stockSubscription = _realtimeService.stockStream.listen((data) {
       if (!mounted) return;
@@ -145,7 +133,7 @@ class _InventoryScreenState extends State<InventoryScreen>
 
   void _onSearchChanged(String value) {
     _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 450), () {
+    _searchDebounce = Timer(AppDurations.slow, () {
       if (_search != value.trim()) {
         _search = value.trim();
         _loadProducts(page: 1);
@@ -203,19 +191,19 @@ class _InventoryScreenState extends State<InventoryScreen>
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: _kPrimary.withValues(alpha: 0.1),
+                      color: AppColors.primary.withAlpha(20),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Icon(Icons.add_box, color: _kPrimary, size: 22),
+                    child: const Icon(
+                      Icons.add_box_outlined,
+                      color: AppColors.primary,
+                      size: 22,
+                    ),
                   ),
                   const SizedBox(width: 12),
-                  const Text(
+                  Text(
                     'เพิ่มสินค้าใหม่',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: _kTextPrimary,
-                    ),
+                    style: AppTextStyles.headingMedium,
                   ),
                 ],
               ),
@@ -228,7 +216,7 @@ class _InventoryScreenState extends State<InventoryScreen>
                       _buildFormField(
                         controller: skuController,
                         label: 'รหัส SKU *',
-                        icon: Icons.qr_code,
+                        icon: Icons.qr_code_outlined,
                         validator: (v) =>
                             v == null || v.isEmpty ? 'กรุณาระบุรหัส SKU' : null,
                       ),
@@ -237,19 +225,23 @@ class _InventoryScreenState extends State<InventoryScreen>
                         controller: nameController,
                         label: 'ชื่อสินค้า *',
                         icon: Icons.shopping_bag_outlined,
-                        validator: (v) =>
-                            v == null || v.isEmpty ? 'กรุณาระบุชื่อสินค้า' : null,
+                        validator: (v) => v == null || v.isEmpty
+                            ? 'กรุณาระบุชื่อสินค้า'
+                            : null,
                       ),
                       const SizedBox(height: 12),
                       _buildFormField(
                         controller: priceController,
                         label: 'ราคาขาย (บาท) *',
-                        icon: Icons.attach_money,
-                        keyboardType:
-                            const TextInputType.numberWithOptions(decimal: true),
+                        icon: Icons.attach_money_outlined,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
                         validator: (v) {
                           if (v == null || v.isEmpty) return 'กรุณาระบุราคา';
-                          if (double.tryParse(v) == null) return 'ต้องเป็นตัวเลข';
+                          if (double.tryParse(v) == null) {
+                            return 'ต้องเป็นตัวเลข';
+                          }
                           return null;
                         },
                       ),
@@ -260,12 +252,11 @@ class _InventoryScreenState extends State<InventoryScreen>
                             child: _buildFormField(
                               controller: stockController,
                               label: 'สต๊อกเริ่มต้น',
-                              icon: Icons.inventory,
+                              icon: Icons.inventory_2_outlined,
                               keyboardType: TextInputType.number,
-                              validator: (v) =>
-                                  int.tryParse(v ?? '') == null
-                                      ? 'ต้องเป็นตัวเลข'
-                                      : null,
+                              validator: (v) => int.tryParse(v ?? '') == null
+                                  ? 'ต้องเป็นตัวเลข'
+                                  : null,
                             ),
                           ),
                           const SizedBox(width: 10),
@@ -273,12 +264,11 @@ class _InventoryScreenState extends State<InventoryScreen>
                             child: _buildFormField(
                               controller: minAlertController,
                               label: 'เตือนต่ำกว่า',
-                              icon: Icons.warning_amber,
+                              icon: Icons.warning_amber_outlined,
                               keyboardType: TextInputType.number,
-                              validator: (v) =>
-                                  int.tryParse(v ?? '') == null
-                                      ? 'ต้องเป็นตัวเลข'
-                                      : null,
+                              validator: (v) => int.tryParse(v ?? '') == null
+                                  ? 'ต้องเป็นตัวเลข'
+                                  : null,
                             ),
                           ),
                         ],
@@ -288,16 +278,13 @@ class _InventoryScreenState extends State<InventoryScreen>
                 ),
               ),
               actions: [
-                TextButton(
-                  onPressed:
-                      isSubmitting ? null : () => Navigator.of(ctx).pop(),
-                  child: const Text(
-                    'ยกเลิก',
-                    style: TextStyle(color: _kTextSecondary),
-                  ),
+                OutlinedButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(ctx).pop(),
+                  child: const Text('ยกเลิก'),
                 ),
-                FilledButton.icon(
-                  style: FilledButton.styleFrom(backgroundColor: _kPrimary),
+                ElevatedButton.icon(
                   onPressed: isSubmitting
                       ? null
                       : () async {
@@ -309,8 +296,9 @@ class _InventoryScreenState extends State<InventoryScreen>
                                 name: nameController.text.trim(),
                                 price: double.parse(priceController.text),
                                 currentStock: int.parse(stockController.text),
-                                minStockAlert:
-                                    int.parse(minAlertController.text),
+                                minStockAlert: int.parse(
+                                  minAlertController.text,
+                                ),
                               );
                               if (ctx.mounted) {
                                 Navigator.of(ctx).pop();
@@ -324,9 +312,7 @@ class _InventoryScreenState extends State<InventoryScreen>
                               setDialogState(() => isSubmitting = false);
                               if (ctx.mounted) {
                                 _showSnackBar(
-                                  e
-                                      .toString()
-                                      .replaceAll('Exception: ', ''),
+                                  e.toString().replaceAll('Exception: ', ''),
                                   isSuccess: false,
                                 );
                               }
@@ -342,7 +328,7 @@ class _InventoryScreenState extends State<InventoryScreen>
                             strokeWidth: 2,
                           ),
                         )
-                      : const Icon(Icons.save, size: 18),
+                      : const Icon(Icons.save_outlined, size: 18),
                   label: const Text('บันทึกข้อมูล'),
                 ),
               ],
@@ -371,15 +357,15 @@ class _InventoryScreenState extends State<InventoryScreen>
         return StatefulBuilder(
           builder: (context, setSheetState) {
             return Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius:
-                    BorderRadius.vertical(top: Radius.circular(24)),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                boxShadow: AppShadows.sidebarShadow,
               ),
               padding: EdgeInsets.only(
                 left: 24,
                 right: 24,
-                top: 24,
+                top: 16,
                 bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
               ),
               child: Form(
@@ -390,11 +376,11 @@ class _InventoryScreenState extends State<InventoryScreen>
                   children: [
                     Center(
                       child: Container(
-                        width: 40,
+                        width: 36,
                         height: 4,
                         margin: const EdgeInsets.only(bottom: 20),
                         decoration: BoxDecoration(
-                          color: Colors.grey.shade300,
+                          color: AppColors.border,
                           borderRadius: BorderRadius.circular(2),
                         ),
                       ),
@@ -404,13 +390,14 @@ class _InventoryScreenState extends State<InventoryScreen>
                         Container(
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [_kPrimary, _kPrimaryDark],
-                            ),
+                            color: AppColors.primary.withAlpha(20),
                             borderRadius: BorderRadius.circular(10),
                           ),
-                          child: const Icon(Icons.sync_alt,
-                              color: Colors.white, size: 20),
+                          child: const Icon(
+                            Icons.sync_alt,
+                            color: AppColors.primary,
+                            size: 20,
+                          ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -419,17 +406,12 @@ class _InventoryScreenState extends State<InventoryScreen>
                             children: [
                               Text(
                                 product.name,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: _kTextPrimary,
-                                ),
+                                style: AppTextStyles.headingMedium,
                                 overflow: TextOverflow.ellipsis,
                               ),
                               Text(
                                 'คงเหลือ: ${product.currentStock} ชิ้น  |  SKU: ${product.sku}',
-                                style: const TextStyle(
-                                    fontSize: 12, color: _kTextSecondary),
+                                style: AppTextStyles.bodySmall,
                               ),
                             ],
                           ),
@@ -445,7 +427,7 @@ class _InventoryScreenState extends State<InventoryScreen>
                           child: _buildTypeChip(
                             label: '➕ รับของเข้า (IN)',
                             isSelected: selectedType == 'IN',
-                            selectedColor: _kInStockColor,
+                            selectedColor: AppColors.success,
                             onTap: () =>
                                 setSheetState(() => selectedType = 'IN'),
                           ),
@@ -455,7 +437,7 @@ class _InventoryScreenState extends State<InventoryScreen>
                           child: _buildTypeChip(
                             label: '➖ เบิกออก (OUT)',
                             isSelected: selectedType == 'OUT',
-                            selectedColor: _kWarningColor,
+                            selectedColor: AppColors.warning,
                             onTap: () =>
                                 setSheetState(() => selectedType = 'OUT'),
                           ),
@@ -468,7 +450,7 @@ class _InventoryScreenState extends State<InventoryScreen>
                       label: selectedType == 'IN'
                           ? 'จำนวนที่รับเข้า (ชิ้น) *'
                           : 'จำนวนที่เบิกออก (ชิ้น) *',
-                      icon: Icons.numbers,
+                      icon: Icons.numbers_outlined,
                       keyboardType: TextInputType.number,
                       autofocus: true,
                       validator: (val) {
@@ -488,35 +470,35 @@ class _InventoryScreenState extends State<InventoryScreen>
                     _buildFormField(
                       controller: refController,
                       label: 'เลขอ้างอิงบิล / เหตุผล',
-                      icon: Icons.receipt_long,
+                      icon: Icons.receipt_long_outlined,
                     ),
                     const SizedBox(height: 20),
                     SizedBox(
                       width: double.infinity,
-                      height: 52,
-                      child: FilledButton.icon(
-                        style: FilledButton.styleFrom(
+                      height: 48,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
                           backgroundColor: selectedType == 'IN'
-                              ? _kInStockColor
-                              : _kWarningColor,
+                              ? AppColors.success
+                              : AppColors.warning,
+                          foregroundColor: Colors.white,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(10),
                           ),
                         ),
                         onPressed: isSubmitting
                             ? null
                             : () async {
                                 if (formKey.currentState!.validate()) {
-                                  setSheetState(
-                                      () => isSubmitting = true);
+                                  setSheetState(() => isSubmitting = true);
                                   try {
                                     await _apiService.recordStockMovement(
                                       productId: product.id,
                                       type: selectedType,
                                       quantity: int.parse(
-                                          quantityController.text),
-                                      referenceId:
-                                          refController.text.trim(),
+                                        quantityController.text,
+                                      ),
+                                      referenceId: refController.text.trim(),
                                     );
                                     if (ctx.mounted) {
                                       Navigator.of(ctx).pop();
@@ -529,13 +511,13 @@ class _InventoryScreenState extends State<InventoryScreen>
                                       );
                                     }
                                   } catch (e) {
-                                    setSheetState(
-                                        () => isSubmitting = false);
+                                    setSheetState(() => isSubmitting = false);
                                     if (ctx.mounted) {
                                       _showSnackBar(
-                                        e
-                                            .toString()
-                                            .replaceAll('Exception: ', ''),
+                                        e.toString().replaceAll(
+                                              'Exception: ',
+                                              '',
+                                            ),
                                         isSuccess: false,
                                       );
                                     }
@@ -553,18 +535,14 @@ class _InventoryScreenState extends State<InventoryScreen>
                               )
                             : Icon(
                                 selectedType == 'IN'
-                                    ? Icons.add_circle
-                                    : Icons.remove_circle,
+                                    ? Icons.add_circle_outline
+                                    : Icons.remove_circle_outline,
                                 size: 20,
                               ),
                         label: Text(
                           selectedType == 'IN'
                               ? 'ยืนยันรับเข้าคลัง'
                               : 'ยืนยันเบิกออกตัดสต๊อก',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
                         ),
                       ),
                     ),
@@ -598,9 +576,6 @@ class _InventoryScreenState extends State<InventoryScreen>
       decoration: InputDecoration(
         labelText: label,
         prefixIcon: Icon(icon, size: 20),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       ),
     );
   }
@@ -612,31 +587,28 @@ class _InventoryScreenState extends State<InventoryScreen>
     required VoidCallback onTap,
   }) {
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
+      duration: AppDurations.fast,
       decoration: BoxDecoration(
         color: isSelected
-            ? selectedColor.withValues(alpha: 0.1)
-            : Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(12),
+            ? selectedColor.withAlpha(20)
+            : AppColors.muted,
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: isSelected ? selectedColor : Colors.grey.shade300,
+          color: isSelected ? selectedColor : AppColors.border,
           width: isSelected ? 2 : 1,
         ),
       ),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         child: Padding(
-          padding:
-              const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
           child: Center(
             child: Text(
               label,
-              style: TextStyle(
-                color: isSelected ? selectedColor : _kTextSecondary,
-                fontWeight:
-                    isSelected ? FontWeight.bold : FontWeight.normal,
-                fontSize: 13,
+              style: AppTextStyles.bodyMedium.copyWith(
+                color: isSelected ? selectedColor : AppColors.mutedForeground,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
               ),
             ),
           ),
@@ -647,14 +619,19 @@ class _InventoryScreenState extends State<InventoryScreen>
 
   void _showSnackBar(String message, {required bool isSuccess}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: isSuccess ? _kInStockColor : _kLowStockColor,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
-    );
+    if (isSuccess) {
+      ElegantNotificationService.success(
+        context,
+        title: '🎉 สำเร็จ!',
+        description: message,
+      );
+    } else {
+      ElegantNotificationService.warning(
+        context,
+        title: '⚠️ คำเตือน',
+        description: message,
+      );
+    }
   }
 
   // ============================================================
@@ -664,145 +641,25 @@ class _InventoryScreenState extends State<InventoryScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _kSurface,
-      appBar: _buildAppBar(),
+      backgroundColor: AppColors.background,
       body: _buildBody(),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddProductDialog,
-        backgroundColor: _kPrimary,
-        foregroundColor: Colors.white,
         icon: const Icon(Icons.add),
-        label: const Text(
-          'เพิ่มสินค้า',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
+        label: const Text('เพิ่มสินค้า'),
       ),
-    );
-  }
-
-  PreferredSizeWidget _buildAppBar() {
-    return AppBar(
-      backgroundColor: _kPrimary,
-      foregroundColor: Colors.white,
-      elevation: 0,
-      title: Consumer<AuthProvider>(
-        builder: (context, auth, _) => Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '📦 คลังสินค้า',
-              style:
-                  TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            Text(
-              '${auth.username} · ${auth.role}',
-              style: const TextStyle(fontSize: 11, color: Colors.white70),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.local_shipping_outlined),
-          tooltip: 'รับสินค้าเข้า (Purchase Orders)',
-          onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const PurchaseOrderScreen()),
-          ).then((_) => _loadProducts()),
-        ),
-        Consumer<AuthProvider>(
-          builder: (context, auth, _) {
-            if (!auth.isManagerOrAdmin) return const SizedBox();
-            return IconButton(
-              icon: const Icon(Icons.bar_chart),
-              tooltip: 'ดูรายงาน Dashboard',
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const DashboardScreen()),
-              ),
-            );
-          },
-        ),
-        IconButton(
-          icon: const Icon(Icons.refresh),
-          onPressed: () => _loadProducts(),
-          tooltip: 'รีเฟรชข้อมูล',
-        ),
-        IconButton(
-          icon: const Icon(Icons.logout),
-          tooltip: 'ออกจากระบบ',
-          onPressed: () => context.read<AuthProvider>().logout(),
-        ),
-        IconButton(
-          icon: const Icon(Icons.point_of_sale,
-              size: 26, color: Colors.amber),
-          tooltip: 'เปิดบิลขายสินค้า (POS)',
-          onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const PosScreen()),
-          ).then((_) => _loadProducts()),
-        ),
-      ],
     );
   }
 
   Widget _buildBody() {
     if (_isLoading) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(color: _kPrimary),
-            SizedBox(height: 16),
-            Text(
-              'กำลังโหลดข้อมูลคลังสินค้า...',
-              style: TextStyle(color: _kTextSecondary),
-            ),
-          ],
-        ),
-      );
+      return const TableSkeletonLoader(rowCount: 8, columnCount: 5);
     }
 
     if (_errorMessage != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: _kLowStockColor.withValues(alpha: 0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.error_outline,
-                    color: _kLowStockColor, size: 48),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'เกิดข้อผิดพลาด',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: _kTextPrimary,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                _errorMessage!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: _kTextSecondary),
-              ),
-              const SizedBox(height: 24),
-              FilledButton.icon(
-                onPressed: _loadProducts,
-                icon: const Icon(Icons.refresh),
-                label: const Text('ลองใหม่อีกครั้ง'),
-              ),
-            ],
-          ),
-        ),
+      return ErpErrorState(
+        message: _errorMessage!,
+        onRetry: _loadProducts,
       );
     }
 
@@ -822,7 +679,7 @@ class _InventoryScreenState extends State<InventoryScreen>
 
   Widget _buildToolbar() {
     return Container(
-      color: Colors.white,
+      color: AppColors.surface,
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: Column(
         children: [
@@ -830,27 +687,8 @@ class _InventoryScreenState extends State<InventoryScreen>
             controller: _searchController,
             onChanged: _onSearchChanged,
             decoration: InputDecoration(
-              prefixIcon:
-                  const Icon(Icons.search, color: _kTextSecondary),
+              prefixIcon: const Icon(Icons.search),
               hintText: 'ค้นหาด้วย SKU หรือชื่อสินค้า...',
-              hintStyle: const TextStyle(color: _kTextSecondary),
-              filled: true,
-              fillColor: _kSurface,
-              contentPadding:
-                  const EdgeInsets.symmetric(vertical: 10),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: Colors.grey.shade200),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide:
-                    const BorderSide(color: _kPrimary, width: 1.5),
-              ),
               suffixIcon: _search.isNotEmpty
                   ? IconButton(
                       icon: const Icon(Icons.close, size: 18),
@@ -892,29 +730,27 @@ class _InventoryScreenState extends State<InventoryScreen>
               ),
               const SizedBox(width: 8),
               Container(
-                height: 36,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10),
+                height: 38,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
                 decoration: BoxDecoration(
-                  color: _kSurface,
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey.shade200),
+                  border: Border.all(color: AppColors.border),
                 ),
                 child: DropdownButtonHideUnderline(
                   child: DropdownButton<String>(
                     value: _sortBy,
                     isDense: true,
-                    style: const TextStyle(
-                        color: _kTextPrimary, fontSize: 13),
+                    style: AppTextStyles.bodyMedium,
                     icon: const Icon(Icons.swap_vert, size: 18),
                     items: const [
                       DropdownMenuItem(value: 'id', child: Text('รหัส')),
+                      DropdownMenuItem(value: 'name', child: Text('ชื่อ')),
+                      DropdownMenuItem(value: 'price', child: Text('ราคา')),
                       DropdownMenuItem(
-                          value: 'name', child: Text('ชื่อ')),
-                      DropdownMenuItem(
-                          value: 'price', child: Text('ราคา')),
-                      DropdownMenuItem(
-                          value: 'currentStock', child: Text('สต๊อก')),
+                        value: 'currentStock',
+                        child: Text('สต๊อก'),
+                      ),
                     ],
                     onChanged: _setSortBy,
                   ),
@@ -925,18 +761,16 @@ class _InventoryScreenState extends State<InventoryScreen>
                 onTap: _toggleOrder,
                 borderRadius: BorderRadius.circular(8),
                 child: Container(
-                  width: 36,
-                  height: 36,
+                  width: 38,
+                  height: 38,
                   decoration: BoxDecoration(
-                    color: _kPrimary.withValues(alpha: 0.1),
+                    color: AppColors.primary.withAlpha(20),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Icon(
-                    _order == 'asc'
-                        ? Icons.arrow_upward
-                        : Icons.arrow_downward,
+                    _order == 'asc' ? Icons.arrow_upward : Icons.arrow_downward,
                     size: 18,
-                    color: _kPrimary,
+                    color: AppColors.primary,
                   ),
                 ),
               ),
@@ -956,28 +790,27 @@ class _InventoryScreenState extends State<InventoryScreen>
   }) {
     final isSelected = _stockStatus == value;
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
+      duration: AppDurations.fast,
       child: InkWell(
         onTap: () => _setStockStatus(value),
         borderRadius: BorderRadius.circular(20),
         child: Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           decoration: BoxDecoration(
-            color: isSelected ? bgColor : _kSurface,
+            color: isSelected ? bgColor : AppColors.muted,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: isSelected ? textColor.withValues(alpha: 0.5) : Colors.grey.shade200,
+              color: isSelected
+                  ? textColor.withAlpha(128)
+                  : AppColors.border,
               width: isSelected ? 1.5 : 1,
             ),
           ),
           child: Text(
             label,
-            style: TextStyle(
-              color: isSelected ? textColor : _kTextSecondary,
-              fontWeight:
-                  isSelected ? FontWeight.bold : FontWeight.normal,
-              fontSize: 12,
+            style: AppTextStyles.labelMedium.copyWith(
+              color: isSelected ? textColor : AppColors.mutedForeground,
+              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
             ),
           ),
         ),
@@ -991,44 +824,39 @@ class _InventoryScreenState extends State<InventoryScreen>
 
   Widget _buildSummaryBar() {
     return Container(
-      color: Colors.white,
+      color: AppColors.surface,
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
       child: Row(
         children: [
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color: _kPrimary.withValues(alpha: 0.08),
+              color: AppColors.primary.withAlpha(20),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Text(
               '$_totalCount รายการ',
-              style: const TextStyle(
-                color: _kPrimary,
+              style: AppTextStyles.labelMedium.copyWith(
+                color: AppColors.primary,
                 fontWeight: FontWeight.bold,
-                fontSize: 12,
               ),
             ),
           ),
           if (_search.isNotEmpty) ...[
             const SizedBox(width: 8),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
-                color: _kWarningColor.withValues(alpha: 0.1),
+                color: AppColors.warning.withAlpha(20),
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.search,
-                      size: 12, color: _kWarningColor),
+                  const Icon(Icons.search, size: 12, color: AppColors.warning),
                   const SizedBox(width: 4),
                   Text(
                     '"$_search"',
-                    style: const TextStyle(
-                        color: _kWarningColor, fontSize: 12),
+                    style: AppTextStyles.labelMedium.copyWith(color: AppColors.warning),
                   ),
                 ],
               ),
@@ -1040,12 +868,15 @@ class _InventoryScreenState extends State<InventoryScreen>
               width: 14,
               height: 14,
               child: CircularProgressIndicator(
-                  strokeWidth: 2, color: _kPrimary),
+                strokeWidth: 2,
+                color: AppColors.primary,
+              ),
             ),
             const SizedBox(width: 6),
-            const Text('กำลังโหลด...',
-                style: TextStyle(
-                    fontSize: 11, color: _kTextSecondary)),
+            const Text(
+              'กำลังโหลด...',
+              style: TextStyle(fontSize: 11, color: AppColors.mutedForeground),
+            ),
           ],
         ],
       ),
@@ -1058,22 +889,10 @@ class _InventoryScreenState extends State<InventoryScreen>
 
   Widget _buildTable() {
     if (_products.isEmpty && !_isLoading) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.inventory_2_outlined,
-                size: 64, color: Colors.grey.shade300),
-            const SizedBox(height: 16),
-            Text(
-              _search.isNotEmpty
-                  ? 'ไม่พบสินค้าที่ค้นหา\n"$_search"'
-                  : '📭 ยังไม่มีสินค้าในคลัง\nกดปุ่ม "+ เพิ่มสินค้า" ด้านล่างขวา',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: _kTextSecondary, fontSize: 14),
-            ),
-          ],
-        ),
+      return ErpEmptyState(
+        icon: Icons.inventory_2_outlined,
+        title: _search.isNotEmpty ? 'ไม่พบสินค้าที่ค้นหา' : 'ยังไม่มีสินค้าในคลัง',
+        subtitle: _search.isNotEmpty ? '"$_search"' : 'กดปุ่ม "+ เพิ่มสินค้า" เพื่อบันทึกสินค้าใหม่',
       );
     }
 
@@ -1084,59 +903,59 @@ class _InventoryScreenState extends State<InventoryScreen>
         thumbVisibility: true,
         child: SingleChildScrollView(
           controller: _tableScrollController,
-          child: PaginatedDataTable(
-            header: Row(
-              children: [
-                const Text(
-                  'สินค้าในคลัง',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: _kTextPrimary,
-                    fontSize: 15,
-                  ),
+          child: Theme(
+            data: Theme.of(context).copyWith(
+              cardTheme: CardThemeData(
+                color: AppColors.surface,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: const BorderSide(color: AppColors.cardBorder),
                 ),
-                const Spacer(),
-                Text(
-                  'หน้า $_currentPage / $_totalPages',
-                  style: const TextStyle(
-                    color: _kTextSecondary,
-                    fontSize: 12,
+              ),
+            ),
+            child: PaginatedDataTable(
+              header: Row(
+                children: [
+                  Text(
+                    'สินค้าในคลัง',
+                    style: AppTextStyles.headingMedium,
+                  ),
+                  const Spacer(),
+                  Text(
+                    'หน้า $_currentPage / $_totalPages',
+                    style: AppTextStyles.bodySmall,
+                  ),
+                ],
+              ),
+              rowsPerPage: _rowsPerPage,
+              availableRowsPerPage: const [_rowsPerPage],
+              showFirstLastButtons: true,
+              onPageChanged: (firstRowIndex) {
+                final page = (firstRowIndex ~/ _rowsPerPage) + 1;
+                _goToPage(page);
+              },
+              headingRowColor: WidgetStateProperty.all(AppColors.muted),
+              columns: [
+                DataColumn(label: _buildColumnHeader('SKU', 'sku')),
+                DataColumn(label: _buildColumnHeader('ชื่อสินค้า', 'name')),
+                DataColumn(
+                  label: _buildColumnHeader('ราคา', 'price'),
+                  numeric: true,
+                ),
+                DataColumn(
+                  label: _buildColumnHeader('คงเหลือ', 'currentStock'),
+                  numeric: true,
+                ),
+                DataColumn(
+                  label: Text(
+                    'สถานะ',
+                    style: AppTextStyles.headingSmall,
                   ),
                 ),
               ],
+              source: _dataSource,
             ),
-            rowsPerPage: _rowsPerPage,
-            availableRowsPerPage: const [_rowsPerPage],
-            showFirstLastButtons: true,
-            onPageChanged: (firstRowIndex) {
-              final page = (firstRowIndex ~/ _rowsPerPage) + 1;
-              _goToPage(page);
-            },
-            headingRowColor: WidgetStateProperty.all(
-              const Color(0xFFF1F5F9),
-            ),
-            columns: [
-              DataColumn(label: _buildColumnHeader('SKU', 'sku')),
-              DataColumn(label: _buildColumnHeader('ชื่อสินค้า', 'name')),
-              DataColumn(
-                label: _buildColumnHeader('ราคา', 'price'),
-                numeric: true,
-              ),
-              DataColumn(
-                label: _buildColumnHeader('คงเหลือ', 'currentStock'),
-                numeric: true,
-              ),
-              const DataColumn(
-                label: Text(
-                  'สถานะ',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: _kTextPrimary,
-                  ),
-                ),
-              ),
-            ],
-            source: _dataSource,
           ),
         ),
       ),
@@ -1158,23 +977,19 @@ class _InventoryScreenState extends State<InventoryScreen>
         children: [
           Text(
             label,
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: isActive ? _kPrimary : _kTextPrimary,
+            style: AppTextStyles.headingSmall.copyWith(
+              color: isActive ? AppColors.primary : AppColors.foreground,
             ),
           ),
           const SizedBox(width: 4),
           if (isActive)
             Icon(
-              _order == 'asc'
-                  ? Icons.arrow_upward
-                  : Icons.arrow_downward,
+              _order == 'asc' ? Icons.arrow_upward : Icons.arrow_downward,
               size: 14,
-              color: _kPrimary,
+              color: AppColors.primary,
             )
           else
-            Icon(Icons.unfold_more,
-                size: 14, color: Colors.grey.shade400),
+            Icon(Icons.unfold_more, size: 14, color: AppColors.mutedForeground),
         ],
       ),
     );
@@ -1186,7 +1001,7 @@ class _InventoryScreenState extends State<InventoryScreen>
 
   Widget _buildPaginationBar() {
     return Container(
-      color: Colors.white,
+      color: AppColors.surface,
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -1198,9 +1013,7 @@ class _InventoryScreenState extends State<InventoryScreen>
           const SizedBox(width: 4),
           _buildNavButton(
             icon: Icons.chevron_left,
-            onTap: _currentPage > 1
-                ? () => _goToPage(_currentPage - 1)
-                : null,
+            onTap: _currentPage > 1 ? () => _goToPage(_currentPage - 1) : null,
           ),
           const SizedBox(width: 12),
           ..._buildPageNumbers(),
@@ -1232,10 +1045,12 @@ class _InventoryScreenState extends State<InventoryScreen>
     if (start > 1) {
       buttons.add(_buildPageNumBtn(1));
       if (start > 2) {
-        buttons.add(const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 4),
-          child: Text('...', style: TextStyle(color: _kTextSecondary)),
-        ));
+        buttons.add(
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text('...', style: AppTextStyles.bodySmall),
+          ),
+        );
       }
     }
 
@@ -1245,10 +1060,12 @@ class _InventoryScreenState extends State<InventoryScreen>
 
     if (end < _totalPages) {
       if (end < _totalPages - 1) {
-        buttons.add(const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 4),
-          child: Text('...', style: TextStyle(color: _kTextSecondary)),
-        ));
+        buttons.add(
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text('...', style: AppTextStyles.bodySmall),
+          ),
+        );
       }
       buttons.add(_buildPageNumBtn(_totalPages));
     }
@@ -1264,24 +1081,20 @@ class _InventoryScreenState extends State<InventoryScreen>
         onTap: () => _goToPage(page),
         borderRadius: BorderRadius.circular(8),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
+          duration: AppDurations.fast,
           width: 36,
           height: 36,
           decoration: BoxDecoration(
-            color: isActive ? _kPrimary : Colors.transparent,
+            color: isActive ? AppColors.primary : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
-            border: isActive
-                ? null
-                : Border.all(color: Colors.grey.shade200),
+            border: isActive ? null : Border.all(color: AppColors.border),
           ),
           alignment: Alignment.center,
           child: Text(
             '$page',
-            style: TextStyle(
-              color: isActive ? Colors.white : _kTextSecondary,
-              fontWeight:
-                  isActive ? FontWeight.bold : FontWeight.normal,
-              fontSize: 13,
+            style: AppTextStyles.bodyMedium.copyWith(
+              color: isActive ? Colors.white : AppColors.mutedForeground,
+              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
             ),
           ),
         ),
@@ -1289,8 +1102,10 @@ class _InventoryScreenState extends State<InventoryScreen>
     );
   }
 
-  Widget _buildNavButton(
-      {required IconData icon, required VoidCallback? onTap}) {
+  Widget _buildNavButton({
+    required IconData icon,
+    required VoidCallback? onTap,
+  }) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
@@ -1299,16 +1114,16 @@ class _InventoryScreenState extends State<InventoryScreen>
         height: 36,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.grey.shade200),
+          border: Border.all(color: AppColors.border),
         ),
-        alignment: Alignment.center,
-        child: Icon(
-          icon,
-          size: 20,
-          color: onTap != null ? _kPrimary : Colors.grey.shade300,
+          alignment: Alignment.center,
+          child: Icon(
+            icon,
+            size: 20,
+            color: onTap != null ? AppColors.primary : AppColors.border,
+          ),
         ),
-      ),
-    );
+      );
   }
 }
 
@@ -1348,27 +1163,24 @@ class _ProductDataSource extends DataTableSource {
       onSelectChanged: (_) => onSelect(product),
       color: WidgetStateProperty.resolveWith<Color?>((states) {
         if (states.contains(WidgetState.hovered)) {
-          return const Color(0xFFEFF6FF);
+          return AppColors.primaryLight.withAlpha(20);
         }
-        if (isOut) return const Color(0xFFFFF1F2).withValues(alpha: 0.3);
-        if (isLow) return const Color(0xFFFFFBEB).withValues(alpha: 0.5);
+        if (isOut) return AppColors.destructive.withAlpha(10);
+        if (isLow) return AppColors.warning.withAlpha(10);
         return null;
       }),
       cells: [
         DataCell(
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
-              color: const Color(0xFFF1F5F9),
+              color: AppColors.muted,
               borderRadius: BorderRadius.circular(6),
             ),
             child: Text(
               product.sku,
-              style: const TextStyle(
-                fontSize: 12,
-                fontFamily: 'monospace',
-                color: Color(0xFF475569),
+              style: AppTextStyles.bodySmall.copyWith(
+                fontFamily: 'FiraCode',
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -1381,17 +1193,12 @@ class _ProductDataSource extends DataTableSource {
             children: [
               Text(
                 product.name,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF0F172A),
-                  fontSize: 13,
-                ),
+                style: AppTextStyles.bodyMedium.copyWith(fontWeight: FontWeight.w600),
                 overflow: TextOverflow.ellipsis,
               ),
               Text(
                 'แตะเพื่อปรับสต๊อก',
-                style: TextStyle(
-                    fontSize: 10, color: Colors.grey.shade400),
+                style: AppTextStyles.bodySmall.copyWith(fontSize: 10),
               ),
             ],
           ),
@@ -1399,24 +1206,22 @@ class _ProductDataSource extends DataTableSource {
         DataCell(
           Text(
             '฿${product.price.toStringAsFixed(2)}',
-            style: const TextStyle(
-              color: Color(0xFF059669),
+            style: AppTextStyles.kpiMedium.copyWith(
+              color: AppColors.success,
               fontWeight: FontWeight.bold,
-              fontSize: 13,
             ),
           ),
         ),
         DataCell(
           Text(
             '${product.currentStock}',
-            style: TextStyle(
+            style: AppTextStyles.kpiMedium.copyWith(
               color: isOut
-                  ? const Color(0xFF94A3B8)
+                  ? AppColors.mutedForeground
                   : isLow
-                      ? const Color(0xFFDC2626)
-                      : const Color(0xFF0F172A),
+                      ? AppColors.destructive
+                      : AppColors.foreground,
               fontWeight: FontWeight.bold,
-              fontSize: 14,
             ),
           ),
         ),
@@ -1427,34 +1232,12 @@ class _ProductDataSource extends DataTableSource {
 
   Widget _buildStatusBadge(bool isOut, bool isLow) {
     if (isOut) {
-      return _badge(
-          'หมดสต๊อก', const Color(0xFF64748B), const Color(0xFFF1F5F9));
+      return ErpStatusBadge.fromString('OUT_OF_STOCK');
     }
     if (isLow) {
-      return _badge(
-          '⚠️ ใกล้หมด', const Color(0xFFDC2626), const Color(0xFFFEF2F2));
+      return ErpStatusBadge.fromString('LOW_STOCK');
     }
-    return _badge(
-        '✓ ปกติ', const Color(0xFF16A34A), const Color(0xFFF0FDF4));
-  }
-
-  Widget _badge(String label, Color textColor, Color bgColor) {
-    return Container(
-      padding:
-          const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: textColor,
-          fontSize: 11,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    );
+    return ErpStatusBadge.fromString('IN_STOCK');
   }
 
   @override
