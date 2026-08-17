@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:provider/provider.dart';
 import '../models/product.dart';
 import '../services/api_service.dart';
 import '../services/auth_provider.dart';
-import 'inventory_screen.dart'; // สั่ง import หน้าคลังสินค้าเดิมเข้ามา เพื่อทำปุ่มเปลี่ยนหน้า
+import '../services/realtime_service.dart';
+import '../widgets/notification_overlay.dart';
+import 'inventory_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -15,7 +18,14 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   final ApiService _apiService = ApiService();
+  final RealtimeService _realtimeService = RealtimeService();
+
+  StreamSubscription<Map<String, dynamic>>? _orderSubscription;
+  StreamSubscription<Map<String, dynamic>>? _stockSubscription;
+  StreamSubscription<bool>? _connectionSubscription;
+
   bool _isLoading = true;
+  bool _isRealtimeConnected = false;
   String? _errorMessage;
   List<Product> _products = [];
 
@@ -23,21 +33,96 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _loadDashboardData();
+    _initRealtimeListeners();
   }
 
-  Future<void> _loadDashboardData() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
+  void _initRealtimeListeners() {
+    _realtimeService.connect();
+    _isRealtimeConnected = _realtimeService.isConnected;
+
+    _connectionSubscription = _realtimeService.connectionStream.listen((connected) {
+      if (mounted) {
+        setState(() {
+          _isRealtimeConnected = connected;
+        });
+      }
     });
+
+    // 💰 ดักฟังออเดอร์ใหม่จาก POS / API
+    _orderSubscription = _realtimeService.orderStream.listen((data) {
+      if (!mounted) return;
+
+      final orderNum = data['orderNumber'] ?? 'N/A';
+      final customer = data['customerName'] ?? 'ลูกค้าทั่วไป';
+      final total = double.tryParse(data['totalAmount'].toString()) ?? 0.0;
+      final createdBy = data['createdBy'] ?? 'พนักงาน';
+
+      // 1. แสดง Live Toast มุมขวาบน
+      LiveNotificationService.show(
+        context,
+        LiveNotification(
+          title: 'มีรายการสั่งซื้อใหม่! ($orderNum)',
+          message: '💰 ยอดขาย ฿${total.toStringAsFixed(2)} บาท ($customer)',
+          subMessage: 'ทำรายการโดย: $createdBy',
+          type: NotificationType.newOrder,
+        ),
+      );
+
+      // 2. รีเฟรชข้อมูลกราฟและสถิติหลังบ้านแบบ Real-time
+      _loadDashboardData(silent: true);
+    });
+
+    // 📦 ดักฟังการขยับสต๊อก
+    _stockSubscription = _realtimeService.stockStream.listen((data) {
+      if (!mounted) return;
+
+      final sku = data['productSku'] ?? '';
+      final name = data['productName'] ?? '';
+      final type = data['type'] ?? '';
+      final qty = data['quantity'] ?? 0;
+      final performedBy = data['performedBy'] ?? 'พนักงาน';
+
+      final typeLabel = type == 'IN' ? 'รับเข้า' : type == 'OUT' ? 'เบิกออก' : 'ปรับสต๊อก';
+
+      LiveNotificationService.show(
+        context,
+        LiveNotification(
+          title: 'อัปเดตสต๊อกสินค้า ($sku)',
+          message: '📦 $typeLabel $qty ชิ้น ($name)',
+          subMessage: 'บันทึกโดย: $performedBy',
+          type: NotificationType.stockUpdated,
+        ),
+      );
+
+      _loadDashboardData(silent: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _orderSubscription?.cancel();
+    _stockSubscription?.cancel();
+    _connectionSubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadDashboardData({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    }
 
     try {
       final data = await _apiService.fetchProducts();
+      if (!mounted) return;
       setState(() {
         _products = data;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = e.toString().replaceAll('Exception: ', '');
         _isLoading = false;
@@ -48,35 +133,70 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(
-        0xFFF5F7FA,
-      ), // สีพื้นหลังเทาอ่อนสไตล์ Web Admin Dashboard
+      backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.dashboard_customize, color: Colors.white),
-            SizedBox(width: 10),
-            Text(
-              'ERP Executive Dashboard (ระบบรายงานผู้บริหาร)',
+            const Icon(Icons.dashboard_customize, color: Colors.white),
+            const SizedBox(width: 10),
+            const Text(
+              'Executive Dashboard',
               style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(width: 12),
+            // 🔴 LIVE WebSocket Indicator
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: _isRealtimeConnected
+                    ? const Color(0xFF22C55E).withValues(alpha: 0.2)
+                    : Colors.red.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: _isRealtimeConnected ? const Color(0xFF22C55E) : Colors.red,
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: _isRealtimeConnected ? const Color(0xFF22C55E) : Colors.red,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    _isRealtimeConnected ? '🔴 LIVE WS' : '⚪ CONNECTING...',
+                    style: TextStyle(
+                      color: _isRealtimeConnected ? const Color(0xFF22C55E) : Colors.red.shade200,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
-        backgroundColor: const Color(0xFF1E293B), // สีน้ำเงินเข้มดูภูมิฐาน
+        backgroundColor: const Color(0xFF1E293B),
         foregroundColor: Colors.white,
         elevation: 4,
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loadDashboardData,
+            onPressed: () => _loadDashboardData(),
             tooltip: 'รีเฟรชสถิติ',
           ),
           IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'ออกจากระบบ',
             onPressed: () {
-              Navigator.pop(context); // ปิดหน้า Dashboard
-              context.read<AuthProvider>().logout(); // ล็อกเอาท์
+              Navigator.pop(context);
+              context.read<AuthProvider>().logout();
             },
           ),
           const SizedBox(width: 8),
@@ -106,9 +226,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
 
-    // ==========================================
-    // คำนวณตัวเลขสถิติภาพรวม (SA Data Analytics)
-    // ==========================================
     final totalProductsCount = _products.length;
     final totalInventoryValue = _products.fold<double>(
       0,
@@ -122,12 +239,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ------------------------------------------
-          // โซนที่ 1: การ์ดตัวเลขสรุปผล (KPI Cards)
-          // ------------------------------------------
+          // KPI Cards
           LayoutBuilder(
             builder: (context, constraints) {
-              // เช็คความกว้างหน้าจอ (Responsive Web Design): ถ้าจอกว้างให้เรียง 4 การ์ดแนวนอน ถ้าจอแคบให้พับบรรทัด
               final isDesktop = constraints.maxWidth > 800;
               return GridView.count(
                 crossAxisCount: isDesktop ? 4 : 2,
@@ -168,9 +282,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 32),
 
-          // ------------------------------------------
-          // โซนที่ 2: กราฟแท่งเปรียบเทียบระดับสต๊อก (Bar Chart)
-          // ------------------------------------------
+          // Bar Chart
           const Text(
             '📊 กราฟวิเคราะห์ปริมาณสต๊อกรายสินค้า (Stock Level Distribution)',
             style: TextStyle(
@@ -188,7 +300,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
+                  color: Colors.black.withValues(alpha: 0.05),
                   blurRadius: 10,
                 ),
               ],
@@ -197,9 +309,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 32),
 
-          // ------------------------------------------
-          // โซนที่ 3: ตารางรายการที่ต้องรีบสั่งซื้อเพิ่ม (Actionable Table)
-          // ------------------------------------------
+          // Low Stock Table
           if (lowStockProducts.isNotEmpty) ...[
             const Row(
               children: [
@@ -223,7 +333,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ดีไซน์สำหรับการ์ด KPI
   Widget _buildKpiCard(
     String title,
     String value,
@@ -238,14 +347,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
         borderRadius: BorderRadius.circular(16),
         border: isAlert ? Border.all(color: Colors.red, width: 2) : null,
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10),
         ],
       ),
       child: Row(
         children: [
           CircleAvatar(
             radius: 28,
-            backgroundColor: color.withOpacity(0.15),
+            backgroundColor: color.withValues(alpha: 0.15),
             child: Icon(icon, color: color, size: 32),
           ),
           const SizedBox(width: 16),
@@ -279,17 +388,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ดีไซน์กราฟแท่งด้วย fl_chart
   Widget _buildStockBarChart() {
     return BarChart(
       BarChartData(
         alignment: BarChartAlignment.spaceAround,
-        maxY:
-            (_products
-                        .map((p) => p.currentStock)
-                        .reduce((a, b) => a > b ? a : b) +
-                    10)
-                .toDouble(), // หาค่าสูงสุดเพื่อตั้งเพดานกราฟ
+        maxY: (_products
+                    .map((p) => p.currentStock)
+                    .reduce((a, b) => a > b ? a : b) +
+                10)
+            .toDouble(),
         barTouchData: BarTouchData(enabled: true),
         titlesData: FlTitlesData(
           show: true,
@@ -298,9 +405,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               showTitles: true,
               getTitlesWidget: (double value, TitleMeta meta) {
                 final index = value.toInt();
-                if (index < 0 || index >= _products.length)
+                if (index < 0 || index >= _products.length) {
                   return const SizedBox();
-                // เอาแค่ชื่อย่อสินค้ามาโชว์ใต้กราฟ
+                }
                 return Padding(
                   padding: const EdgeInsets.only(top: 8.0),
                   child: Text(
@@ -329,7 +436,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         barGroups: _products.asMap().entries.map((entry) {
           final index = entry.key;
           final product = entry.value;
-          // ถ้าสต๊อกต่ำให้แท่งกราฟเป็นสีแดง ถ้าปกติให้เป็นสีน้ำเงิน
           final barColor = product.isLowStock
               ? Colors.redAccent
               : Colors.blueAccent;
@@ -351,8 +457,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // ดีไซน์ตารางแจ้งเตือนสินค้าใกล้หมด (Web Table Style)
-  // ดีไซน์ตารางแจ้งเตือนสินค้าใกล้หมด (Web Table Style) พร้อมปุ่ม Create PO
   Widget _buildLowStockTable(List<Product> lowStockProducts) {
     return Container(
       width: double.infinity,
@@ -360,16 +464,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10),
         ],
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
         child: SingleChildScrollView(
-          scrollDirection:
-              Axis.horizontal, // เผื่อหน้าจอแคบให้เลื่อนตารางซ้ายขวาได้
+          scrollDirection: Axis.horizontal,
           child: DataTable(
-            headingRowColor: MaterialStateProperty.all(Colors.red.shade50),
+            headingRowColor: WidgetStateProperty.all(Colors.red.shade50),
             columns: const [
               DataColumn(
                 label: Text(
@@ -403,7 +506,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   'จัดการ (Action)',
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
-              ), // เพิ่มคอลัมน์ใหม่
+              ),
             ],
             rows: lowStockProducts.map((product) {
               return DataRow(
@@ -445,7 +548,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ),
                   ),
-                  // ปุ่มกดสั่งซื้อ (Create PO) สำหรับผู้จัดการ
                   DataCell(
                     ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
@@ -461,9 +563,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         'ออกใบ PO',
                         style: TextStyle(fontSize: 12),
                       ),
-                      onPressed: () => _showCreatePODialog(
-                        product,
-                      ), // เรียกฟังก์ชันเปิด Dialog
+                      onPressed: () => _showCreatePODialog(product),
                     ),
                   ),
                 ],
@@ -475,18 +575,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // =========================================================================
-  // ฟังก์ชันแสดง Pop-up เปิดใบสั่งซื้อ PO (สำหรับผู้จัดการ)
-  // =========================================================================
   void _showCreatePODialog(Product product) async {
-    // 1. โหลดข้อมูลซัพพลายเออร์ขึ้นมาก่อน
     List<Map<String, dynamic>> suppliers = [];
     try {
       suppliers = await _apiService.fetchSuppliers();
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('โหลดซัพพลายเออร์ล้มเหลว: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('โหลดซัพพลายเออร์ล้มเหลว: $e')),
+      );
       return;
     }
 
@@ -502,12 +598,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
 
     int selectedSupplierId = suppliers.first['id'];
-    final qtyController = TextEditingController(
-      text: '10',
-    ); // แนะนำสั่งทีละ 10 ชิ้น
+    final qtyController = TextEditingController(text: '10');
     final costController = TextEditingController(
       text: (product.price * 0.7).toStringAsFixed(0),
-    ); // จำลองต้นทุนซื้อเข้าเป็น 70% ของราคาขาย
+    );
 
     if (!mounted) return;
 
@@ -522,7 +616,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Dropdown เลือกซัพพลายเออร์
                   DropdownButtonFormField<int>(
                     decoration: const InputDecoration(
                       labelText: 'เลือกบริษัทซัพพลายเออร์',
@@ -536,8 +629,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       );
                     }).toList(),
                     onChanged: (val) {
-                      if (val != null)
+                      if (val != null) {
                         setDialogState(() => selectedSupplierId = val);
+                      }
                     },
                   ),
                   const SizedBox(height: 16),
@@ -594,7 +688,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       : () async {
                           setDialogState(() => isSubmitting = true);
                           try {
-                            // ส่งโครงสร้าง JSON ไปหา Node.js
                             await _apiService.createPurchaseOrder(
                               selectedSupplierId,
                               [

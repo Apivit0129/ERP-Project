@@ -1,13 +1,34 @@
 require('dotenv').config(); // 💡 โหลด .env ก่อนทุกอย่าง!
 const express = require('express');
+const http = require('http');           // ⭐ ต้องใช้ http.createServer เพื่อแชร์กับ socket.io
+const { Server } = require('socket.io'); // ⭐ โหลด socket.io Server
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const prisma = require('./db');
-const { authenticateToken, authorizeRoles, SECRET_KEY } = require('./auth'); // 💡 เรียกใช้พี่การ์ดตรวจบัตร
+const { authenticateToken, authorizeRoles, SECRET_KEY } = require('./auth');
 
 const app = express();
 const PORT = 3000;
+
+// สร้าง HTTP server แยกเพื่อแชร์กับ Socket.io
+const server = http.createServer(app);
+
+// ⭐ ตั้งค่า Socket.io พร้อม CORS สำหรับ Flutter Web (localhost ทุก port)
+const io = new Server(server, {
+  cors: {
+    origin: '*',           // ใน Production ให้ระบุ domain จริง เช่น 'https://erp.company.com'
+    methods: ['GET', 'POST']
+  }
+});
+
+// Log เมื่อ client เชื่อมต่อ/ตัดการเชื่อมต่อ (สำหรับ Debugging)
+io.on('connection', (socket) => {
+  console.log(`🔌 [Socket.io] Client เชื่อมต่อแล้ว: ${socket.id} (รวม: ${io.engine.clientsCount} เครื่อง)`);
+  socket.on('disconnect', () => {
+    console.log(`❌ [Socket.io] Client ตัดการเชื่อมต่อ: ${socket.id}`);
+  });
+});
 
 app.use(cors());
 app.use(express.json());
@@ -136,12 +157,95 @@ app.post('/api/auth/login', async (req, res) => {
 // โซนที่ 2: Protected ERP Endpoints (ต้องมี JWT บัตรพนักงานถึงจะเข้าได้!)
 // =========================================================================
 
-// 2.1 ดึงสินค้าทั้งหมด (เข้าได้ทุกคนที่มี Token)
+// 2.1 ดึงสินค้าแบบ Server-side Pagination / Search / Sorting
 app.get('/api/products', authenticateToken, async (req, res) => {
   try {
-    const products = await prisma.product.findMany({ orderBy: { id: 'asc' } });
-    res.status(200).json({ success: true, count: products.length, data: products });
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const skip = (page - 1) * limit;
+    const search = (req.query.search || '').trim();
+    const stockStatus = req.query.stockStatus || 'ALL';
+    const allowedSortFields = ['id', 'sku', 'name', 'price', 'currentStock', 'createdAt'];
+    // Map Flutter camelCase → Prisma field (ซึ่ง map ไปยัง snake_case ใน DB อยู่แล้ว)
+    const sortBy = allowedSortFields.includes(req.query.sortBy) ? req.query.sortBy : 'id';
+    const order = req.query.order === 'desc' ? 'desc' : 'asc';
+
+    // ⭐ FIX: LOW_STOCK ต้องเปรียบ currentStock <= minStockAlert ซึ่งเป็น column อื่น
+    // Prisma WHERE ไม่รองรับ column-to-column comparison โดยตรง → ใช้ $queryRaw เฉพาะกรณีนี้
+    if (stockStatus === 'LOW_STOCK') {
+      const searchClause = search ? `AND (sku ILIKE $4 OR name ILIKE $4)` : '';
+      const searchParam = search ? `%${search}%` : null;
+      const orderCol = sortBy === 'currentStock' ? 'current_stock'
+                     : sortBy === 'minStockAlert' ? 'min_stock_alert'
+                     : sortBy === 'createdAt' ? 'created_at'
+                     : sortBy;
+      const orderDir = order.toUpperCase();
+
+      // สร้าง query ด้วย tagged template (Prisma Sql) ไม่ได้เพราะ dynamic ORDER BY
+      // ใช้ $queryRawUnsafe อย่างปลอดภัย เพราะ orderCol/orderDir ผ่าน allowlist แล้ว
+      const productsRaw = await prisma.$queryRawUnsafe(
+        `SELECT id, sku, name, price::text, current_stock AS "currentStock", min_stock_alert AS "minStockAlert", created_at AS "createdAt", updated_at AS "updatedAt"
+         FROM products
+         WHERE current_stock <= min_stock_alert AND current_stock > 0
+         ${searchParam ? `AND (sku ILIKE $3 OR name ILIKE $3)` : ''}
+         ORDER BY "${orderCol}" ${orderDir}
+         LIMIT $1 OFFSET $2`,
+        ...(searchParam ? [limit, skip, searchParam] : [limit, skip])
+      );
+      const countRaw = await prisma.$queryRawUnsafe(
+        `SELECT COUNT(*) AS total FROM products
+         WHERE current_stock <= min_stock_alert AND current_stock > 0
+         ${searchParam ? `AND (sku ILIKE $1 OR name ILIKE $1)` : ''}`,
+        ...(searchParam ? [searchParam] : [])
+      );
+      const totalCount = Number(countRaw[0].total);
+      // แปลง price กลับเป็น string ให้ตรงกับ Decimal format ของ Prisma
+      const products = productsRaw.map(p => ({ ...p, minStockAlert: p.minStockAlert }));
+      const totalPages = Math.ceil(totalCount / limit);
+      const meta = { page, limit, totalCount, totalPages };
+      return res.status(200).json({
+        success: true,
+        data: products,
+        meta: meta,
+        pagination: meta
+      });
+    }
+
+    // กรณีอื่น: ใช้ Prisma ORM ปกติ
+    const filters = [];
+    if (search) {
+      filters.push({
+        OR: [
+          { sku: { contains: search, mode: 'insensitive' } },
+          { name: { contains: search, mode: 'insensitive' } }
+        ]
+      });
+    }
+    if (stockStatus === 'OUT_OF_STOCK') {
+      filters.push({ currentStock: 0 });
+    } else if (stockStatus === 'IN_STOCK') {
+      filters.push({ currentStock: { gt: 0 } });
+    }
+    const where = filters.length ? { AND: filters } : {};
+    const [products, totalCount] = await prisma.$transaction([
+      prisma.product.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { [sortBy]: order }
+      }),
+      prisma.product.count({ where })
+    ]);
+    const totalPages = Math.ceil(totalCount / limit);
+    const meta = { page, limit, totalCount, totalPages };
+    res.status(200).json({
+      success: true,
+      data: products,
+      meta: meta,
+      pagination: meta
+    });
   } catch (error) {
+    console.error('[products error]', error);
     res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดที่เซิร์ฟเวอร์" });
   }
 });
@@ -203,6 +307,20 @@ app.post('/api/stock-movements', authenticateToken, async (req, res) => {
       });
       return { updatedProduct, movementLog };
     });
+
+    // ⭐ Real-time: Broadcast ข่าวการขยับสต๊อกไปหาทุก client ที่เชื่อมต่ออยู่
+    io.emit('stock_updated', {
+      productId: parseInt(productId),
+      productName: product.name,
+      productSku: product.sku,
+      type,
+      quantity: parseInt(quantity),
+      newStock,
+      referenceId: referenceId || 'MANUAL-ADJUSTMENT',
+      performedBy: req.user.username,
+      timestamp: new Date().toISOString()
+    });
+    console.log(`📡 [Socket.io] Emit 'stock_updated' → SKU: ${product.sku} | Type: ${type} | Qty: ${quantity}`);
 
     res.status(201).json({ success: true, message: "ปรับสต๊อกสำเร็จ!", data: result });
   } catch (error) {
@@ -316,6 +434,18 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
       return newOrder;
     });
 
+    // ⭐ Real-time: Broadcast บิลใหม่ไปทุก client ทันที!
+    io.emit('new_order', {
+      orderNumber: resultOrder.orderNumber,
+      customerName: resultOrder.customerName,
+      totalAmount: parseFloat(resultOrder.totalAmount),
+      itemCount: validatedItems.length,
+      itemNames: validatedItems.map(i => i.name).join(', '),
+      createdBy: req.user.username,
+      timestamp: new Date().toISOString()
+    });
+    console.log(`📡 [Socket.io] Emit 'new_order' → ${resultOrder.orderNumber} | ฿${resultOrder.totalAmount}`);
+
     res.status(201).json({
       success: true,
       message: "เปิดบิลขายและตัดสต๊อกสำเร็จ!",
@@ -347,14 +477,62 @@ app.get('/api/suppliers', authenticateToken, async (req, res) => {
   }
 });
 
-// 3.2 API: เปิดใบสั่งซื้อ (Create Purchase Order)
+// 3.2 API: ดู PO สำหรับติดตามสถานะ/หน้ารับของ
+app.get('/api/purchase-orders', authenticateToken, async (req, res) => {
+  try {
+    const where = req.query.status ? { status: req.query.status } : {};
+    const purchaseOrders = await prisma.purchaseOrder.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        supplier: true,
+        items: { include: { product: true } },
+        createdBy: { select: { username: true } }
+      }
+    });
+    res.status(200).json({ success: true, data: purchaseOrders });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "ดึงรายการใบสั่งซื้อล้มเหลว" });
+  }
+});
+
+// 3.3 API: ดูรายละเอียด PO จากเลขที่ใช้สแกน/กรอกในหน้ารับของ
+app.get('/api/purchase-orders/:id', authenticateToken, async (req, res) => {
+  try {
+    const purchaseOrder = await prisma.purchaseOrder.findUnique({
+      where: { id: parseInt(req.params.id) },
+      include: { supplier: true, items: { include: { product: true } } }
+    });
+    if (!purchaseOrder) return res.status(404).json({ success: false, message: "ไม่พบใบสั่งซื้อนี้" });
+    res.status(200).json({ success: true, data: purchaseOrder });
+  } catch (error) {
+    res.status(400).json({ success: false, message: "รหัสใบสั่งซื้อไม่ถูกต้อง" });
+  }
+});
+
+// 3.4 API: เปิดใบสั่งซื้อ (Create Purchase Order)
 app.post('/api/purchase-orders', authenticateToken, authorizeRoles('ADMIN', 'MANAGER'), async (req, res) => {
   try {
     const { supplierId, items } = req.body;
-    if (!supplierId || !items || items.length === 0) return res.status(400).json({ success: false, message: "ข้อมูลไม่ครบถ้วน" });
+    if (!supplierId || !Array.isArray(items) || items.length === 0) return res.status(400).json({ success: false, message: "กรุณาระบุซัพพลายเออร์และรายการสินค้า" });
 
-    // สร้างเลขที่ใบสั่งซื้อ เช่น PO-20260727-8899
-    const poNumber = `PO-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const supplier = await prisma.supplier.findUnique({ where: { id: parseInt(supplierId) } });
+    if (!supplier) return res.status(404).json({ success: false, message: "ไม่พบซัพพลายเออร์ที่เลือก" });
+
+    const productIds = items.map((item) => parseInt(item.productId));
+    const hasInvalidItem = items.some((item, index) =>
+      !Number.isInteger(productIds[index]) ||
+      !Number.isInteger(Number(item.quantity)) || Number(item.quantity) <= 0 ||
+      !Number.isFinite(Number(item.unitCost)) || Number(item.unitCost) < 0
+    );
+    if (hasInvalidItem || new Set(productIds).size !== productIds.length) {
+      return res.status(400).json({ success: false, message: "รายการสินค้า จำนวน และต้นทุนต้องถูกต้อง และห้ามซ้ำกัน" });
+    }
+
+    const productCount = await prisma.product.count({ where: { id: { in: productIds } } });
+    if (productCount !== productIds.length) return res.status(404).json({ success: false, message: "พบสินค้าที่ไม่มีอยู่ในระบบ" });
+
+    const poNumber = `PO-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
 
     const newPO = await prisma.$transaction(async (tx) => {
       // 1. สร้างหัวบิล PO
@@ -381,37 +559,59 @@ app.post('/api/purchase-orders', authenticateToken, authorizeRoles('ADMIN', 'MAN
       return po;
     });
 
-    res.status(201).json({ success: true, message: "สร้างใบสั่งซื้อ (PO) สำเร็จ!", data: newPO });
+    res.status(201).json({ success: true, message: "สร้างใบสั่งซื้อ (PO) สำเร็จ! สต๊อกยังไม่ถูกเพิ่มจนกว่าจะรับของ", data: newPO });
   } catch (error) {
     res.status(500).json({ success: false, message: "สร้างใบสั่งซื้อล้มเหลว" });
   }
 });
 
-// 3.3 API: รับของเข้าคลังจากใบ PO (Receive PO & Update Stock)
+// 3.5 API: รับของเข้าคลังจากใบ PO (Receive PO & Update Stock)
 app.post('/api/purchase-orders/:id/receive', authenticateToken, authorizeRoles('ADMIN', 'MANAGER', 'WAREHOUSE_STAFF'), async (req, res) => {
   try {
     const poId = parseInt(req.params.id);
     const { receivedItems } = req.body; // อาเรย์เก็บ productId และ จำนวนที่รับจริง
+    if (!Array.isArray(receivedItems) || receivedItems.length === 0) {
+      return res.status(400).json({ success: false, message: "กรุณาระบุรายการที่รับเข้า" });
+    }
 
     const po = await prisma.purchaseOrder.findUnique({ where: { id: poId }, include: { items: true } });
     if (!po) return res.status(404).json({ success: false, message: "ไม่พบใบสั่งซื้อนี้" });
     if (po.status === 'RECEIVED') return res.status(400).json({ success: false, message: "ใบสั่งซื้อนี้รับของเข้าคลังไปแล้ว" });
 
+    const receivedByProductId = new Map();
+    for (const item of receivedItems) {
+      const productId = parseInt(item.productId);
+      const quantity = Number(item.receivedQuantity);
+      if (!Number.isInteger(productId) || !Number.isInteger(quantity) || quantity < 0 || receivedByProductId.has(productId)) {
+        return res.status(400).json({ success: false, message: "ข้อมูลจำนวนรับเข้าไม่ถูกต้อง" });
+      }
+      receivedByProductId.set(productId, quantity);
+    }
+
+    // ปิด PO ได้ต่อเมื่อรับครบทุกสินค้าเท่านั้น เพื่อไม่ให้สต๊อกและ Audit Trail ผิดพลาด
+    const isComplete = po.items.length === receivedByProductId.size && po.items.every((item) =>
+      receivedByProductId.get(item.productId) === item.orderQuantity
+    );
+    if (!isComplete) {
+      return res.status(400).json({
+        success: false,
+        message: "ยอดรับไม่ตรงกับใบ PO กรุณาตรวจสอบจำนวนก่อนยืนยันรับของ"
+      });
+    }
+
     // ⭐ พระเอก SA: Transaction ตัดยอดรับของ + อัปเดตสต๊อก + สร้าง Audit Trail พร้อมกัน!
     const result = await prisma.$transaction(async (tx) => {
-      for (const reqItem of receivedItems) {
-        // หา Item ใน PO เพื่อเอามาอัปเดตยอดที่รับจริง
-        const poItem = po.items.find(i => i.productId === reqItem.productId);
-        if (poItem) {
+      for (const poItem of po.items) {
+        const receivedQuantity = receivedByProductId.get(poItem.productId);
           await tx.purchaseOrderItem.update({
             where: { id: poItem.id },
-            data: { receivedQuantity: reqItem.receivedQuantity } // บันทึกว่ารับของมากี่ชิ้น (อาจจะไม่เท่ากับ orderQuantity ถ้าของขาด)
+            data: { receivedQuantity }
           });
 
           // อัปเดตสต๊อกหลักในคลัง (เพิ่มของเข้า)
           await tx.product.update({
             where: { id: poItem.productId },
-            data: { currentStock: { increment: reqItem.receivedQuantity } } // ใช้ { increment: ... } เป็นทริคให้บวกค่าเพิ่มไปจากเดิม
+            data: { currentStock: { increment: receivedQuantity } }
           });
 
           // ⭐ บันทึก Audit Trail อัตโนมัติ อ้างอิงเลข PO!
@@ -419,12 +619,11 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, authorizeRoles('
             data: {
               productId: poItem.productId,
               type: 'IN', // ประเภทรับเข้า
-              quantity: reqItem.receivedQuantity,
+              quantity: receivedQuantity,
               referenceId: po.poNumber, // อ้างอิงว่าเข้าเพราะใบสั่งซื้อเบอร์นี้!
               performedById: req.user.id
             }
           });
-        }
       }
 
       // ปิดงาน: เปลี่ยนสถานะหัวบิล PO เป็น RECEIVED
@@ -442,6 +641,8 @@ app.post('/api/purchase-orders/:id/receive', authenticateToken, authorizeRoles('
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 เซิร์ฟเวอร์ ERP พร้อมระบบ Security เปิดทำงานแล้วที่พอร์ต http://localhost:${PORT}`);
+// ⭐ ใช้ server.listen แทน app.listen เพื่อให้ Socket.io ใช้ HTTP server เดียวกัน!
+server.listen(PORT, () => {
+  console.log(`🚀 เซิร์ฟเวอร์ ERP + Socket.io Real-time เปิดแล้วที่ http://localhost:${PORT}`);
+  console.log(`🔌 Socket.io พร้อมรับ client เชื่อมต่อแล้ว (CORS: *)`);
 });

@@ -117,18 +117,44 @@ class ApiService {
   // ส่วนที่ 2: ERP API (เหน็บ _getHeaders() ทุกจุด!)
   // ==========================================
 
-  Future<List<Product>> fetchProducts() async {
+  Future<ProductPage> fetchProductPage({
+    int page = 1,
+    int limit = 20,
+    String search = '',
+    String stockStatus = 'ALL',
+    String sortBy = 'id',
+    String order = 'asc',
+  }) async {
     try {
       final headers = await _getHeaders();
+      final uri = Uri.parse('$baseUrl/products').replace(
+        queryParameters: {
+          'page': '$page',
+          'limit': '$limit',
+          if (search.trim().isNotEmpty) 'search': search.trim(),
+          if (stockStatus != 'ALL') 'stockStatus': stockStatus,
+          'sortBy': sortBy,
+          'order': order,
+        },
+      );
       final response = await http.get(
-        Uri.parse('$baseUrl/products'),
+        uri,
         headers: headers,
       );
 
       if (response.statusCode == 200) {
         final Map<String, dynamic> jsonResponse = json.decode(response.body);
         final List<dynamic> productsJson = jsonResponse['data'];
-        return productsJson.map((json) => Product.fromJson(json)).toList();
+        final meta = (jsonResponse['meta'] ?? jsonResponse['pagination']) as Map<String, dynamic>;
+        return ProductPage(
+          products: productsJson
+              .map((json) => Product.fromJson(json as Map<String, dynamic>))
+              .toList(),
+          page: meta['page'] as int,
+          limit: meta['limit'] as int,
+          totalCount: meta['totalCount'] as int,
+          totalPages: meta['totalPages'] as int,
+        );
       } else if (response.statusCode == 401 || response.statusCode == 403) {
         throw Exception('เซสชันหมดอายุ กรุณาล็อกอินใหม่');
       } else {
@@ -137,6 +163,11 @@ class ApiService {
     } catch (e) {
       throw Exception('ข้อผิดพลาด: $e');
     }
+  }
+
+  // สำหรับหน้าที่ต้องใช้รายการย่อ เช่น Dashboard/POS; หน้าคลังใช้ fetchProductPage
+  Future<List<Product>> fetchProducts({int limit = 100}) async {
+    return (await fetchProductPage(limit: limit)).products;
   }
 
   Future<void> createProduct({
@@ -238,4 +269,49 @@ class ApiService {
       );
     }
   }
+
+  Future<List<Map<String, dynamic>>> fetchPurchaseOrders({
+    String? status,
+  }) async {
+    final uri = Uri.parse('$baseUrl/purchase-orders').replace(
+      queryParameters: status == null ? null : {'status': status},
+    );
+    final response = await http.get(uri, headers: await _getHeaders());
+    final data = json.decode(response.body) as Map<String, dynamic>;
+    if (response.statusCode == 200) {
+      return List<Map<String, dynamic>>.from(data['data'] as List);
+    }
+    throw Exception(data['message'] ?? 'ดึงรายการ PO ล้มเหลว');
+  }
+
+  Future<void> receivePurchaseOrder(
+    int purchaseOrderId,
+    List<Map<String, dynamic>> receivedItems,
+  ) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/purchase-orders/$purchaseOrderId/receive'),
+      headers: await _getHeaders(),
+      body: json.encode({'receivedItems': receivedItems}),
+    );
+    final data = json.decode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200 || data['success'] != true) {
+      throw Exception(data['message'] ?? 'รับสินค้าเข้าคลังไม่สำเร็จ');
+    }
+  }
+}
+
+class ProductPage {
+  const ProductPage({
+    required this.products,
+    required this.page,
+    required this.limit,
+    required this.totalCount,
+    required this.totalPages,
+  });
+
+  final List<Product> products;
+  final int page;
+  final int limit;
+  final int totalCount;
+  final int totalPages;
 }
